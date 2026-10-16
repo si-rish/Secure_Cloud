@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: securecloud-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: securecloud
+      POSTGRES_USER: securecloud_user
+      POSTGRES_PASSWORD: securecloud_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U securecloud_user -d securecloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongodb:
+    image: mongo:8
+    container_name: securecloud-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  mongodb_data:
