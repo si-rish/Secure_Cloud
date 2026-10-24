@@ -1,13 +1,17 @@
 const pool = require("../config/postgres");
 
-async function createFile({
-  ownerId,
-  originalName,
-  storageKey,
-  mimeType,
-  sizeBytes,
-  checksum = null,
-}) {
+// Create file metadata.
+async function createFile(
+  {
+    ownerId,
+    originalName,
+    storageKey,
+    mimeType,
+    sizeBytes,
+    checksum = null,
+  },
+  dbClient = pool
+) {
   const query = `
     INSERT INTO files (
       owner_id,
@@ -30,10 +34,12 @@ async function createFile({
     checksum,
   ];
 
-  const result = await pool.query(query, values);
+  const result = await dbClient.query(query, values);
+
   return result.rows[0];
 }
 
+// Retrieve file metadata by ID.
 async function findFileById(fileId) {
   const query = `
     SELECT *
@@ -42,21 +48,46 @@ async function findFileById(fileId) {
   `;
 
   const result = await pool.query(query, [fileId]);
+
   return result.rows[0] || null;
 }
 
-async function findFilesByOwner(ownerId) {
+// Retrieve a page of files belonging to a user.
+// Uses cursor-based pagination with created_at and id.
+async function findFilesByOwner(
+  ownerId,
+  { limit = 10, cursor = null } = {}
+) {
+  const values = [ownerId];
+  let cursorCondition = "";
+
+  if (cursor) {
+    values.push(cursor.createdAt, cursor.id);
+
+    cursorCondition = `
+      AND (created_at, id) < ($2::timestamptz, $3::uuid)
+    `;
+  }
+
+  values.push(limit + 1);
+
+  const limitPosition = values.length;
+
   const query = `
     SELECT *
     FROM files
     WHERE owner_id = $1
-    ORDER BY created_at DESC;
+    ${cursorCondition}
+    ORDER BY created_at DESC, id DESC
+    LIMIT $${limitPosition};
   `;
 
-  const result = await pool.query(query, [ownerId]);
+  const result = await pool.query(query, values);
+
   return result.rows;
 }
 
+// Delete file metadata belonging to a user.
 async function deleteFile(fileId, ownerId) {
   const result = await pool.query(
     `DELETE FROM files
@@ -68,6 +99,7 @@ async function deleteFile(fileId, ownerId) {
   return result.rowCount > 0;
 }
 
+// Retrieve file metadata only when the user owns it.
 async function findFileByIdAndOwner(fileId, ownerId) {
   const query = `
     SELECT *
@@ -76,6 +108,7 @@ async function findFileByIdAndOwner(fileId, ownerId) {
   `;
 
   const result = await pool.query(query, [fileId, ownerId]);
+
   return result.rows[0] || null;
 }
 

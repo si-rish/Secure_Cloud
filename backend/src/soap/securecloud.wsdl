@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions
+  name="SecureCloudService"
+  targetNamespace="http://securecloud.example.com/soap"
+  xmlns="http://schemas.xmlsoap.org/wsdl/"
+  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+  xmlns:tns="http://securecloud.example.com/soap"
+  xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+
+  <types>
+    <xsd:schema targetNamespace="http://securecloud.example.com/soap">
+      <xsd:element name="HealthCheckRequest">
+        <xsd:complexType/>
+      </xsd:element>
+
+      <xsd:element name="HealthCheckResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="status" type="xsd:string"/>
+            <xsd:element name="service" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+
+  <message name="HealthCheckInput">
+    <part name="parameters" element="tns:HealthCheckRequest"/>
+  </message>
+
+  <message name="HealthCheckOutput">
+    <part name="parameters" element="tns:HealthCheckResponse"/>
+  </message>
+
+  <portType name="SecureCloudPortType">
+    <operation name="HealthCheck">
+      <input message="tns:HealthCheckInput"/>
+      <output message="tns:HealthCheckOutput"/>
+    </operation>
+  </portType>
+
+  <binding name="SecureCloudBinding" type="tns:SecureCloudPortType">
+    <soap:binding
+      style="document"
+      transport="http://schemas.xmlsoap.org/soap/http"/>
+
+    <operation name="HealthCheck">
+      <soap:operation soapAction="http://securecloud.example.com/soap/HealthCheck"/>
+      <input>
+        <soap:body use="literal"/>
+      </input>
+      <output>
+        <soap:body use="literal"/>
+      </output>
+    </operation>
+  </binding>
+
+  <service name="SecureCloudService">
+    <port name="SecureCloudPort" binding="tns:SecureCloudBinding">
+      <soap:address location="http://localhost:5000/soap"/>
+    </port>
+  </service>
+</definitions>

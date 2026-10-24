@@ -5,6 +5,7 @@ const registerSchema = {
       type: "string",
       minLength: 1,
       maxLength: 100,
+      pattern: ".*\\S.*",
     },
     email: {
       type: "string",
@@ -14,6 +15,7 @@ const registerSchema = {
     password: {
       type: "string",
       minLength: 8,
+      maxLength: 128,
     },
   },
   required: ["name", "email", "password"],
@@ -31,6 +33,7 @@ const loginSchema = {
     password: {
       type: "string",
       minLength: 1,
+      maxLength: 128,
     },
   },
   required: ["email", "password"],

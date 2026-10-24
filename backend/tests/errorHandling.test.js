@@ -17,4 +17,44 @@ describe("Centralized Error Handling", () => {
       },
     });
   });
+
+  test("health endpoint should return 200 and prevent caching", async () => {
+    const response = await request(app).get("/health");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.body.success).toBe(true);
+  });
+  test("should return a standardized 500 response for unexpected errors", async () => {
+    const express = require("express");
+    const sendError = require("../src/utils/errorResponse");
+    const testApp = express();
+
+    testApp.get("/test-error", (req, res, next) => {
+      next(new Error("Simulated internal failure"));
+    });
+
+    testApp.use((err, req, res, next) => {
+      if (res.headersSent) return next(err);
+
+      return sendError(
+        res,
+        500,
+        "INTERNAL_SERVER_ERROR",
+        "Internal server error"
+      );
+    });
+
+    const response = await request(testApp).get("/test-error");
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Internal server error",
+        details: [],
+      },
+    });
+  });
 });
