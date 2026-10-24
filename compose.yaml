@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: securecloud
       POSTGRES_USER: securecloud_user
-      POSTGRES_PASSWORD: securecloud_dev_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securecloud_dev_password}
     ports:
       - "5432:5432"
     volumes:
@@ -30,6 +30,33 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: securecloud-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      FRONTEND_URL: http://localhost:5173
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: securecloud
+      POSTGRES_USER: securecloud_user
+      MONGODB_URI: mongodb://mongodb:27017/securecloud
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./backend/storage/uploads:/app/storage/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
 
 volumes:
   postgres_data:

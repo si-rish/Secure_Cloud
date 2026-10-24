@@ -40,7 +40,7 @@ afterEach(async () => {
 
   test("rejects requests without authentication", async () => {
     const response = await request(app)
-      .post("/api/v1/files/upload");
+      .post("/api/v1/files/content");
 
     expect(response.status).toBe(401);
     expect(response.body.success).toBe(false);
@@ -48,7 +48,7 @@ afterEach(async () => {
 
   test("rejects a text file disguised as a PDF", async () => {
     const response = await request(app)
-      .post("/api/v1/files/upload")
+      .post("/api/v1/files/content")
       .set("Authorization", `Bearer ${token}`)
       .attach(
         "file",
@@ -73,7 +73,7 @@ expect(
 
   test("rejects an unsupported file extension", async () => {
     const response = await request(app)
-      .post("/api/v1/files/upload")
+      .post("/api/v1/files/content")
       .set("Authorization", `Bearer ${token}`)
       .attach(
         "file",
@@ -94,7 +94,7 @@ expect(
     );
 
     const response = await request(app)
-      .post("/api/v1/files/upload")
+      .post("/api/v1/files/content")
       .set("Authorization", `Bearer ${token}`)
       .attach(
         "file",
