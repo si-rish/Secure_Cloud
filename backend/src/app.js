@@ -13,6 +13,7 @@ const attachSoapServer = require("./soap/soapServer");
 
 const fileRoutes = require("./routes/fileRoutes");
 const authRoutes = require("./routes/authRoutes");
+const workspaceRoutes = require("./routes/workspaceRoutes");
 const sendError = require("./utils/errorResponse");
 
 const openApiPath = path.join(__dirname, "docs", "openapi.yaml");
@@ -158,6 +159,7 @@ app.use("/api/v1/graphql", graphqlRouter);
 
 // Other versioned API routes
 app.use("/api/v1/files", fileRoutes);
+app.use("/api/v1/workspace", workspaceRoutes);
 
 // Centralized 404 handler
 app.use((req, res) => {

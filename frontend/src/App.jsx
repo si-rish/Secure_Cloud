@@ -1,4 +1,3 @@
-import { useCallback, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import Login from "./pages/Login.jsx";
@@ -6,30 +5,27 @@ import Register from "./pages/Register.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import MyFiles from "./pages/MyFiles.jsx";
 import Profile from "./pages/Profile.jsx";
-import SplashScreen from "./components/common/SplashScreen.jsx";
+import AdminDashboard from "./pages/AdminDashboard.jsx";
+import ManagerDashboard from "./pages/ManagerDashboard.jsx";
 
 function App() {
-  const [showSplash, setShowSplash] = useState(true);
+return ( <Routes>
+<Route path="/" element={<Navigate to="/login" replace />} />
 
-  const handleSplashComplete = useCallback(() => {
-    setShowSplash(false);
-  }, []);
+  <Route path="/login" element={<Login />} />
+  <Route path="/register" element={<Register />} />
 
-  if (showSplash) {
-    return <SplashScreen onComplete={handleSplashComplete} />;
-  }
+  <Route path="/dashboard" element={<Dashboard />} />
+  <Route path="/my-files" element={<MyFiles />} />
+  <Route path="/profile" element={<Profile />} />
 
-  return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/login" replace />} />
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route path="/dashboard" element={<Dashboard />} />
-      <Route path="/files" element={<MyFiles />} />
-      <Route path="/profile" element={<Profile />} />
-      <Route path="*" element={<Navigate to="/login" replace />} />
-    </Routes>
-  );
+  <Route path="/admin" element={<AdminDashboard />} />
+  <Route path="/manager" element={<ManagerDashboard />} />
+
+  <Route path="*" element={<Navigate to="/login" replace />} />
+</Routes>
+
+);
 }
 
 export default App;

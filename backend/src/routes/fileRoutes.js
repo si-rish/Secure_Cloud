@@ -1,9 +1,13 @@
 const express = require("express");
+
 const router = express.Router();
 
-const validateRequest = require("../middleware/validateRequest");
-const { createFileSchema } = require("../schemas/fileSchemas");
 const authMiddleware = require("../middleware/authMiddleware");
+const loadCurrentUser = require("../middleware/loadCurrentUser");
+const validateRequest = require("../middleware/validateRequest");
+const idempotencyMiddleware = require("../middleware/idempotencyMiddleware");
+
+const { createFileSchema } = require("../schemas/fileSchemas");
 
 const {
   upload,
@@ -12,11 +16,11 @@ const {
 
 const fileController = require("../controllers/fileController");
 
-// All file routes require authentication.
+// All file routes require a valid JWT and an active database account.
 router.use(authMiddleware);
+router.use(loadCurrentUser);
 
 // File responses contain private user data.
-// Require revalidation before cached responses can be reused.
 router.use((req, res, next) => {
   if (req.method === "GET") {
     res.set("Cache-Control", "private, no-cache");
@@ -38,28 +42,26 @@ router.post(
 // POST /api/v1/files
 router.post(
   "/",
+  idempotencyMiddleware,
   validateRequest(createFileSchema),
   fileController.createFile
 );
 
-// List files belonging to the authenticated user.
-// GET /api/v1/files
+// List accessible files.
+// The controller must restrict results to the current user's permissions.
 router.get("/", fileController.getUserFiles);
 
-// Download a file's content.
-// GET /api/v1/files/:id/content
+// Download file content.
 router.get("/:id/content", fileController.downloadFile);
 
-// Verify a file's integrity.
-// GET /api/v1/files/:id/integrity
+// Verify file integrity.
 router.get("/:id/integrity", fileController.verifyFileIntegrity);
 
 // Delete a file.
-// DELETE /api/v1/files/:id
+// The controller must enforce owner/admin deletion rules.
 router.delete("/:id", fileController.deleteFile);
 
-// Get metadata for a specific file.
-// GET /api/v1/files/:id
+// Get file metadata.
 router.get("/:id", fileController.getFile);
 
 module.exports = router;

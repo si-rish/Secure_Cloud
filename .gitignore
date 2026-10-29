@@ -37,3 +37,5 @@ desktop.ini
 # User-uploaded files (keep the directory structure)
 backend/storage/uploads/*
 !backend/storage/uploads/.gitkeep
+
+backend/backups/

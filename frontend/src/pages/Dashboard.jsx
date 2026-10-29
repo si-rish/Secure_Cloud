@@ -305,7 +305,7 @@ function Dashboard() {
 
             <button
               type="button"
-              onClick={() => navigate("/files")}
+              onClick={() => navigate("/my-files")}
               className={`mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${theme.muted} ${theme.hover}`}
             >
               <FolderOpen size={19} />
@@ -402,7 +402,7 @@ function Dashboard() {
 
                 <button
                   type="button"
-                  onClick={() => navigate("/files")}
+                  onClick={() => navigate("/my-files")}
                   className="mt-6 inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-blue-700 shadow-md transition hover:-translate-y-0.5 hover:bg-blue-50"
                 >
                   <Upload size={17} />
@@ -514,7 +514,7 @@ function Dashboard() {
 
                 <button
                   type="button"
-                  onClick={() => navigate("/files")}
+                  onClick={() => navigate("/my-files")}
                   className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
                 >
                   View all
@@ -591,7 +591,7 @@ function Dashboard() {
                 {!search && (
                   <button
                     type="button"
-                    onClick={() => navigate("/files")}
+                    onClick={() => navigate("/my-files")}
                     className="mt-5 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700"
                   >
                     <Upload size={17} />
@@ -667,7 +667,7 @@ function Dashboard() {
                   <div className={`border-t px-6 py-4 ${theme.divider}`}>
                     <button
                       type="button"
-                      onClick={() => navigate("/files")}
+                      onClick={() => navigate("/my-files")}
                       className="text-sm font-semibold text-blue-500 hover:text-blue-400"
                     >
                       View all {filteredFiles.length} files →

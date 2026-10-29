@@ -28,25 +28,42 @@ function Login() {
     }));
   }
 
-  async function handleSubmit(event) {
-    event.preventDefault();
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  setError("");
 
-    setError("");
-    setLoading(true);
-
-    try {
-      await authService.login(form.email.trim(), form.password);
-
-      navigate("/dashboard", { replace: true });
-    } catch (err) {
-      setError(
-        err.response?.data?.message ||
-          "Unable to sign in. Please check your credentials and try again."
-      );
-    } finally {
-      setLoading(false);
-    }
+  if (!form.email.trim() || !form.password) {
+    setError("Please enter your email and password.");
+    return;
   }
+
+  setLoading(true);
+
+  try {
+    const { user } = await authService.login(
+      form.email.trim(),
+      form.password
+    );
+
+    const roleRoutes = {
+      admin: "/admin",
+      manager: "/manager",
+      user: "/dashboard",
+    };
+
+    navigate(roleRoutes[user?.role] || "/dashboard", {
+      replace: true,
+    });
+  } catch (err) {
+    setError(
+      err.response?.data?.message ||
+        "Unable to sign in. Please check your credentials and try again."
+    );
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
     <div className="grid min-h-screen bg-white lg:grid-cols-2">

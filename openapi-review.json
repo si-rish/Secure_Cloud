@@ -1,0 +1,1122 @@
+﻿{
+    "openapi":  "3.0.3",
+    "info":  {
+                 "title":  "SecureCloud API",
+                 "version":  "1.0.0",
+                 "description":  "SecureCloud is a secure private cloud storage and file management system.\nIt provides authenticated access to file metadata and file operations.\n"
+             },
+    "servers":  [
+                    {
+                        "url":  "/api/v1",
+                        "description":  "SecureCloud version 1 API"
+                    }
+                ],
+    "tags":  [
+                 {
+                     "name":  "Authentication",
+                     "description":  "User registration and login"
+                 },
+                 {
+                     "name":  "Files",
+                     "description":  "File metadata and storage operations"
+                 }
+             ],
+    "components":  {
+                       "securitySchemes":  {
+                                               "bearerAuth":  {
+                                                                  "type":  "http",
+                                                                  "scheme":  "bearer",
+                                                                  "bearerFormat":  "JWT"
+                                                              }
+                                           },
+                       "schemas":  {
+                                       "ErrorResponse":  {
+                                                             "type":  "object",
+                                                             "required":  [
+                                                                              "success",
+                                                                              "error"
+                                                                          ],
+                                                             "properties":  {
+                                                                                "success":  {
+                                                                                                "type":  "boolean",
+                                                                                                "example":  false
+                                                                                            },
+                                                                                "error":  {
+                                                                                              "type":  "object",
+                                                                                              "required":  [
+                                                                                                               "code",
+                                                                                                               "message",
+                                                                                                               "details"
+                                                                                                           ],
+                                                                                              "properties":  {
+                                                                                                                 "code":  {
+                                                                                                                              "type":  "string",
+                                                                                                                              "description":  "Machine-readable error code.",
+                                                                                                                              "example":  "VALIDATION_ERROR"
+                                                                                                                          },
+                                                                                                                 "message":  {
+                                                                                                                                 "type":  "string",
+                                                                                                                                 "description":  "Human-readable explanation of the error.",
+                                                                                                                                 "example":  "Request validation failed"
+                                                                                                                             },
+                                                                                                                 "details":  {
+                                                                                                                                 "type":  "array",
+                                                                                                                                 "description":  "Additional information about the error.",
+                                                                                                                                 "items":  {
+
+                                                                                                                                           },
+                                                                                                                                 "example":  [
+
+                                                                                                                                             ]
+                                                                                                                             }
+                                                                                                             }
+                                                                                          }
+                                                                            }
+                                                         },
+                                       "FileMetadata":  {
+                                                            "type":  "object",
+                                                            "additionalProperties":  false,
+                                                            "required":  [
+                                                                             "originalName",
+                                                                             "storageKey",
+                                                                             "sizeBytes"
+                                                                         ],
+                                                            "properties":  {
+                                                                               "id":  {
+                                                                                          "type":  "string",
+                                                                                          "format":  "uuid",
+                                                                                          "readOnly":  true
+                                                                                      },
+                                                                               "originalName":  {
+                                                                                                    "type":  "string",
+                                                                                                    "minLength":  1,
+                                                                                                    "maxLength":  255,
+                                                                                                    "example":  "report.pdf"
+                                                                                                },
+                                                                               "storageKey":  {
+                                                                                                  "type":  "string",
+                                                                                                  "minLength":  1,
+                                                                                                  "maxLength":  255,
+                                                                                                  "example":  "8f6a2c1d-report.pdf"
+                                                                                              },
+                                                                               "mimeType":  {
+                                                                                                "type":  "string",
+                                                                                                "nullable":  true,
+                                                                                                "maxLength":  255,
+                                                                                                "example":  "application/pdf"
+                                                                                            },
+                                                                               "sizeBytes":  {
+                                                                                                 "type":  "integer",
+                                                                                                 "minimum":  0,
+                                                                                                 "maximum":  9007199254740991,
+                                                                                                 "example":  204800
+                                                                                             },
+                                                                               "checksum":  {
+                                                                                                "type":  "string",
+                                                                                                "nullable":  true,
+                                                                                                "maxLength":  64,
+                                                                                                "pattern":  "^[a-fA-F0-9]{64}$",
+                                                                                                "example":  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                                                                            }
+                                                                           }
+                                                        },
+                                       "FileMetadataResponse":  {
+                                                                    "type":  "object",
+                                                                    "required":  [
+                                                                                     "success",
+                                                                                     "data"
+                                                                                 ],
+                                                                    "properties":  {
+                                                                                       "success":  {
+                                                                                                       "type":  "boolean",
+                                                                                                       "example":  true
+                                                                                                   },
+                                                                                       "data":  {
+                                                                                                    "$ref":  "#/components/schemas/FileMetadata"
+                                                                                                }
+                                                                                   }
+                                                                },
+                                       "FileListResponse":  {
+                                                                "type":  "object",
+                                                                "required":  [
+                                                                                 "success",
+                                                                                 "count",
+                                                                                 "data",
+                                                                                 "pagination",
+                                                                                 "links"
+                                                                             ],
+                                                                "properties":  {
+                                                                                   "success":  {
+                                                                                                   "type":  "boolean",
+                                                                                                   "example":  true
+                                                                                               },
+                                                                                   "count":  {
+                                                                                                 "type":  "integer",
+                                                                                                 "example":  10
+                                                                                             },
+                                                                                   "data":  {
+                                                                                                "type":  "array",
+                                                                                                "items":  {
+                                                                                                              "$ref":  "#/components/schemas/FileMetadata"
+                                                                                                          }
+                                                                                            },
+                                                                                   "pagination":  {
+                                                                                                      "type":  "object",
+                                                                                                      "required":  [
+                                                                                                                       "limit",
+                                                                                                                       "hasMore",
+                                                                                                                       "nextCursor"
+                                                                                                                   ],
+                                                                                                      "properties":  {
+                                                                                                                         "limit":  {
+                                                                                                                                       "type":  "integer",
+                                                                                                                                       "example":  10
+                                                                                                                                   },
+                                                                                                                         "hasMore":  {
+                                                                                                                                         "type":  "boolean",
+                                                                                                                                         "example":  true
+                                                                                                                                     },
+                                                                                                                         "nextCursor":  {
+                                                                                                                                            "type":  "string",
+                                                                                                                                            "nullable":  true,
+                                                                                                                                            "example":  "eyJjcmVhdGVkQXQiOiIyMDI2LTEwLTIwVDA5OjAwOjAwWiIsImlkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwIn0"
+                                                                                                                                        }
+                                                                                                                     }
+                                                                                                  },
+                                                                                   "links":  {
+                                                                                                 "type":  "object",
+                                                                                                 "required":  [
+                                                                                                                  "next"
+                                                                                                              ],
+                                                                                                 "properties":  {
+                                                                                                                    "next":  {
+                                                                                                                                 "type":  "string",
+                                                                                                                                 "nullable":  true,
+                                                                                                                                 "example":  "/api/v1/files?limit=10\u0026cursor=eyJjdXJzb3IiOiJleGFtcGxlIn0"
+                                                                                                                             }
+                                                                                                                }
+                                                                                             }
+                                                                               }
+                                                            },
+                                       "UploadResponse":  {
+                                                              "type":  "object",
+                                                              "required":  [
+                                                                               "success",
+                                                                               "message",
+                                                                               "data"
+                                                                           ],
+                                                              "properties":  {
+                                                                                 "success":  {
+                                                                                                 "type":  "boolean",
+                                                                                                 "example":  true
+                                                                                             },
+                                                                                 "message":  {
+                                                                                                 "type":  "string",
+                                                                                                 "example":  "File uploaded successfully"
+                                                                                             },
+                                                                                 "data":  {
+                                                                                              "$ref":  "#/components/schemas/FileMetadata"
+                                                                                          }
+                                                                             }
+                                                          },
+                                       "DeleteResponse":  {
+                                                              "type":  "object",
+                                                              "required":  [
+                                                                               "success",
+                                                                               "message"
+                                                                           ],
+                                                              "properties":  {
+                                                                                 "success":  {
+                                                                                                 "type":  "boolean",
+                                                                                                 "example":  true
+                                                                                             },
+                                                                                 "message":  {
+                                                                                                 "type":  "string",
+                                                                                                 "example":  "File deleted successfully"
+                                                                                             }
+                                                                             }
+                                                          },
+                                       "IntegrityResponse":  {
+                                                                 "type":  "object",
+                                                                 "required":  [
+                                                                                  "success",
+                                                                                  "message",
+                                                                                  "data"
+                                                                              ],
+                                                                 "properties":  {
+                                                                                    "success":  {
+                                                                                                    "type":  "boolean",
+                                                                                                    "example":  true
+                                                                                                },
+                                                                                    "message":  {
+                                                                                                    "type":  "string",
+                                                                                                    "example":  "File integrity verified successfully"
+                                                                                                },
+                                                                                    "data":  {
+                                                                                                 "type":  "object",
+                                                                                                 "required":  [
+                                                                                                                  "fileId",
+                                                                                                                  "originalName",
+                                                                                                                  "integrity"
+                                                                                                              ],
+                                                                                                 "properties":  {
+                                                                                                                    "fileId":  {
+                                                                                                                                   "type":  "string",
+                                                                                                                                   "format":  "uuid"
+                                                                                                                               },
+                                                                                                                    "originalName":  {
+                                                                                                                                         "type":  "string"
+                                                                                                                                     },
+                                                                                                                    "integrity":  {
+                                                                                                                                      "type":  "string",
+                                                                                                                                      "enum":  [
+                                                                                                                                                   "verified",
+                                                                                                                                                   "failed"
+                                                                                                                                               ]
+                                                                                                                                  }
+                                                                                                                }
+                                                                                             }
+                                                                                }
+                                                             },
+                                       "RegisterResponse":  {
+                                                                "type":  "object",
+                                                                "required":  [
+                                                                                 "success",
+                                                                                 "message",
+                                                                                 "data"
+                                                                             ],
+                                                                "properties":  {
+                                                                                   "success":  {
+                                                                                                   "type":  "boolean",
+                                                                                                   "example":  true
+                                                                                               },
+                                                                                   "message":  {
+                                                                                                   "type":  "string",
+                                                                                                   "example":  "Registration successful"
+                                                                                               },
+                                                                                   "data":  {
+                                                                                                "type":  "object",
+                                                                                                "required":  [
+                                                                                                                 "id",
+                                                                                                                 "name",
+                                                                                                                 "email",
+                                                                                                                 "role",
+                                                                                                                 "created_at"
+                                                                                                             ],
+                                                                                                "properties":  {
+                                                                                                                   "id":  {
+                                                                                                                              "type":  "integer",
+                                                                                                                              "example":  1
+                                                                                                                          },
+                                                                                                                   "name":  {
+                                                                                                                                "type":  "string",
+                                                                                                                                "example":  "Test User"
+                                                                                                                            },
+                                                                                                                   "email":  {
+                                                                                                                                 "type":  "string",
+                                                                                                                                 "format":  "email",
+                                                                                                                                 "example":  "test@example.com"
+                                                                                                                             },
+                                                                                                                   "role":  {
+                                                                                                                                "type":  "string",
+                                                                                                                                "example":  "user"
+                                                                                                                            },
+                                                                                                                   "created_at":  {
+                                                                                                                                      "type":  "string",
+                                                                                                                                      "format":  "date-time",
+                                                                                                                                      "example":  "2026-10-22T10:00:00.000Z"
+                                                                                                                                  }
+                                                                                                               }
+                                                                                            }
+                                                                               }
+                                                            },
+                                       "AuthTokenResponse":  {
+                                                                 "type":  "object",
+                                                                 "required":  [
+                                                                                  "success",
+                                                                                  "message",
+                                                                                  "data"
+                                                                              ],
+                                                                 "properties":  {
+                                                                                    "success":  {
+                                                                                                    "type":  "boolean",
+                                                                                                    "example":  true
+                                                                                                },
+                                                                                    "message":  {
+                                                                                                    "type":  "string",
+                                                                                                    "example":  "Login successful"
+                                                                                                },
+                                                                                    "data":  {
+                                                                                                 "type":  "object",
+                                                                                                 "required":  [
+                                                                                                                  "token",
+                                                                                                                  "user"
+                                                                                                              ],
+                                                                                                 "properties":  {
+                                                                                                                    "token":  {
+                                                                                                                                  "type":  "string",
+                                                                                                                                  "description":  "JWT authentication token."
+                                                                                                                              },
+                                                                                                                    "user":  {
+                                                                                                                                 "type":  "object",
+                                                                                                                                 "required":  [
+                                                                                                                                                  "id",
+                                                                                                                                                  "name",
+                                                                                                                                                  "email",
+                                                                                                                                                  "role"
+                                                                                                                                              ],
+                                                                                                                                 "properties":  {
+                                                                                                                                                    "id":  {
+                                                                                                                                                               "type":  "integer",
+                                                                                                                                                               "example":  1
+                                                                                                                                                           },
+                                                                                                                                                    "name":  {
+                                                                                                                                                                 "type":  "string",
+                                                                                                                                                                 "example":  "Test User"
+                                                                                                                                                             },
+                                                                                                                                                    "email":  {
+                                                                                                                                                                  "type":  "string",
+                                                                                                                                                                  "format":  "email",
+                                                                                                                                                                  "example":  "test@example.com"
+                                                                                                                                                              },
+                                                                                                                                                    "role":  {
+                                                                                                                                                                 "type":  "string",
+                                                                                                                                                                 "example":  "user"
+                                                                                                                                                             }
+                                                                                                                                                }
+                                                                                                                             }
+                                                                                                                }
+                                                                                             }
+                                                                                }
+                                                             }
+                                   },
+                       "parameters":  {
+                                          "FileId":  {
+                                                         "name":  "id",
+                                                         "in":  "path",
+                                                         "required":  true,
+                                                         "description":  "File UUID.",
+                                                         "schema":  {
+                                                                        "type":  "string",
+                                                                        "format":  "uuid"
+                                                                    }
+                                                     }
+                                      },
+                       "responses":  {
+                                         "BadRequest":  {
+                                                            "description":  "Invalid request or validation failure.",
+                                                            "content":  {
+                                                                            "application/json":  {
+                                                                                                     "schema":  {
+                                                                                                                    "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                                }
+                                                                                                 }
+                                                                        }
+                                                        },
+                                         "Unauthorized":  {
+                                                              "description":  "Authentication is required or credentials are invalid.",
+                                                              "content":  {
+                                                                              "application/json":  {
+                                                                                                       "schema":  {
+                                                                                                                      "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                                  }
+                                                                                                   }
+                                                                          }
+                                                          },
+                                         "Forbidden":  {
+                                                           "description":  "The authenticated user is not permitted to perform this operation.",
+                                                           "content":  {
+                                                                           "application/json":  {
+                                                                                                    "schema":  {
+                                                                                                                   "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                               }
+                                                                                                }
+                                                                       }
+                                                       },
+                                         "NotFound":  {
+                                                          "description":  "Requested resource was not found.",
+                                                          "content":  {
+                                                                          "application/json":  {
+                                                                                                   "schema":  {
+                                                                                                                  "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                              }
+                                                                                               }
+                                                                      }
+                                                      },
+                                         "Conflict":  {
+                                                          "description":  "The request conflicts with existing data or an idempotency key.",
+                                                          "content":  {
+                                                                          "application/json":  {
+                                                                                                   "schema":  {
+                                                                                                                  "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                              }
+                                                                                               }
+                                                                      }
+                                                      },
+                                         "TooManyRequests":  {
+                                                                 "description":  "Rate limit exceeded.",
+                                                                 "content":  {
+                                                                                 "application/json":  {
+                                                                                                          "schema":  {
+                                                                                                                         "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                                     }
+                                                                                                      }
+                                                                             }
+                                                             },
+                                         "NotAcceptable":  {
+                                                               "description":  "Requested response representation is not supported.",
+                                                               "content":  {
+                                                                               "application/json":  {
+                                                                                                        "schema":  {
+                                                                                                                       "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                                   }
+                                                                                                    }
+                                                                           }
+                                                           },
+                                         "ServiceUnavailable":  {
+                                                                    "description":  "A required service is temporarily unavailable.",
+                                                                    "content":  {
+                                                                                    "application/json":  {
+                                                                                                             "schema":  {
+                                                                                                                            "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                                        }
+                                                                                                         }
+                                                                                }
+                                                                }
+                                     }
+                   },
+    "paths":  {
+                  "/auth/register":  {
+                                         "post":  {
+                                                      "tags":  [
+                                                                   "Authentication"
+                                                               ],
+                                                      "summary":  "Register a new user",
+                                                      "description":  "Creates a user account.",
+                                                      "operationId":  "registerUser",
+                                                      "requestBody":  {
+                                                                          "required":  true,
+                                                                          "content":  {
+                                                                                          "application/json":  {
+                                                                                                                   "schema":  {
+                                                                                                                                  "type":  "object",
+                                                                                                                                  "additionalProperties":  false,
+                                                                                                                                  "required":  [
+                                                                                                                                                   "name",
+                                                                                                                                                   "email",
+                                                                                                                                                   "password"
+                                                                                                                                               ],
+                                                                                                                                  "properties":  {
+                                                                                                                                                     "name":  {
+                                                                                                                                                                  "type":  "string",
+                                                                                                                                                                  "example":  "Alex Morgan"
+                                                                                                                                                              },
+                                                                                                                                                     "email":  {
+                                                                                                                                                                   "type":  "string",
+                                                                                                                                                                   "format":  "email",
+                                                                                                                                                                   "example":  "alex@example.com"
+                                                                                                                                                               },
+                                                                                                                                                     "password":  {
+                                                                                                                                                                      "type":  "string",
+                                                                                                                                                                      "format":  "password",
+                                                                                                                                                                      "minLength":  8,
+                                                                                                                                                                      "example":  "ChangeMe123!"
+                                                                                                                                                                  }
+                                                                                                                                                 }
+                                                                                                                              }
+                                                                                                               }
+                                                                                      }
+                                                                      },
+                                                      "responses":  {
+                                                                        "201":  {
+                                                                                    "description":  "User registered successfully.",
+                                                                                    "content":  {
+                                                                                                    "application/json":  {
+                                                                                                                             "schema":  {
+                                                                                                                                            "$ref":  "#/components/schemas/RegisterResponse"
+                                                                                                                                        }
+                                                                                                                         }
+                                                                                                }
+                                                                                },
+                                                                        "400":  {
+                                                                                    "$ref":  "#/components/responses/BadRequest"
+                                                                                },
+                                                                        "409":  {
+                                                                                    "$ref":  "#/components/responses/Conflict"
+                                                                                },
+                                                                        "429":  {
+                                                                                    "$ref":  "#/components/responses/TooManyRequests"
+                                                                                }
+                                                                    }
+                                                  }
+                                     },
+                  "/auth/login":  {
+                                      "post":  {
+                                                   "tags":  [
+                                                                "Authentication"
+                                                            ],
+                                                   "summary":  "Log in",
+                                                   "description":  "Authenticates a user and returns an authentication response.",
+                                                   "operationId":  "loginUser",
+                                                   "requestBody":  {
+                                                                       "required":  true,
+                                                                       "content":  {
+                                                                                       "application/json":  {
+                                                                                                                "schema":  {
+                                                                                                                               "type":  "object",
+                                                                                                                               "additionalProperties":  false,
+                                                                                                                               "required":  [
+                                                                                                                                                "email",
+                                                                                                                                                "password"
+                                                                                                                                            ],
+                                                                                                                               "properties":  {
+                                                                                                                                                  "email":  {
+                                                                                                                                                                "type":  "string",
+                                                                                                                                                                "format":  "email",
+                                                                                                                                                                "example":  "alex@example.com"
+                                                                                                                                                            },
+                                                                                                                                                  "password":  {
+                                                                                                                                                                   "type":  "string",
+                                                                                                                                                                   "format":  "password",
+                                                                                                                                                                   "example":  "ChangeMe123!"
+                                                                                                                                                               }
+                                                                                                                                              }
+                                                                                                                           }
+                                                                                                            }
+                                                                                   }
+                                                                   },
+                                                   "responses":  {
+                                                                     "200":  {
+                                                                                 "description":  "Login successful.",
+                                                                                 "content":  {
+                                                                                                 "application/json":  {
+                                                                                                                          "schema":  {
+                                                                                                                                         "$ref":  "#/components/schemas/AuthTokenResponse"
+                                                                                                                                     }
+                                                                                                                      }
+                                                                                             }
+                                                                             },
+                                                                     "400":  {
+                                                                                 "$ref":  "#/components/responses/BadRequest"
+                                                                             },
+                                                                     "401":  {
+                                                                                 "$ref":  "#/components/responses/Unauthorized"
+                                                                             },
+                                                                     "429":  {
+                                                                                 "$ref":  "#/components/responses/TooManyRequests"
+                                                                             }
+                                                                 }
+                                               }
+                                  },
+                  "/files/content":  {
+                                         "post":  {
+                                                      "tags":  [
+                                                                   "Files"
+                                                               ],
+                                                      "summary":  "Upload a file",
+                                                      "description":  "Uploads a physical file using multipart/form-data.\nThe server validates the actual file type, calculates a SHA-256\nchecksum, and creates the file metadata.\n",
+                                                      "operationId":  "uploadFile",
+                                                      "security":  [
+                                                                       {
+                                                                           "bearerAuth":  [
+
+                                                                                          ]
+                                                                       }
+                                                                   ],
+                                                      "requestBody":  {
+                                                                          "required":  true,
+                                                                          "content":  {
+                                                                                          "multipart/form-data":  {
+                                                                                                                      "schema":  {
+                                                                                                                                     "type":  "object",
+                                                                                                                                     "required":  [
+                                                                                                                                                      "file"
+                                                                                                                                                  ],
+                                                                                                                                     "properties":  {
+                                                                                                                                                        "file":  {
+                                                                                                                                                                     "type":  "string",
+                                                                                                                                                                     "format":  "binary",
+                                                                                                                                                                     "description":  "File to upload."
+                                                                                                                                                                 }
+                                                                                                                                                    }
+                                                                                                                                 }
+                                                                                                                  }
+                                                                                      }
+                                                                      },
+                                                      "responses":  {
+                                                                        "201":  {
+                                                                                    "description":  "File uploaded successfully.",
+                                                                                    "content":  {
+                                                                                                    "application/json":  {
+                                                                                                                             "schema":  {
+                                                                                                                                            "$ref":  "#/components/schemas/UploadResponse"
+                                                                                                                                        }
+                                                                                                                         }
+                                                                                                }
+                                                                                },
+                                                                        "400":  {
+                                                                                    "$ref":  "#/components/responses/BadRequest"
+                                                                                },
+                                                                        "401":  {
+                                                                                    "$ref":  "#/components/responses/Unauthorized"
+                                                                                },
+                                                                        "413":  {
+                                                                                    "description":  "Uploaded file exceeds the permitted size.",
+                                                                                    "content":  {
+                                                                                                    "application/json":  {
+                                                                                                                             "schema":  {
+                                                                                                                                            "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                                                        }
+                                                                                                                         }
+                                                                                                }
+                                                                                },
+                                                                        "429":  {
+                                                                                    "$ref":  "#/components/responses/TooManyRequests"
+                                                                                },
+                                                                        "500":  {
+                                                                                    "description":  "Upload or metadata creation failed.",
+                                                                                    "content":  {
+                                                                                                    "application/json":  {
+                                                                                                                             "schema":  {
+                                                                                                                                            "$ref":  "#/components/schemas/ErrorResponse"
+                                                                                                                                        }
+                                                                                                                         }
+                                                                                                }
+                                                                                }
+                                                                    }
+                                                  }
+                                     },
+                  "/files":  {
+                                 "get":  {
+                                             "tags":  [
+                                                          "Files"
+                                                      ],
+                                             "summary":  "List the authenticated user\u0027s files",
+                                             "description":  "Returns a cursor-paginated list of files belonging to the\nauthenticated user. JSON and XML representations are supported\naccording to the Accept header.\n",
+                                             "operationId":  "listFiles",
+                                             "security":  [
+                                                              {
+                                                                  "bearerAuth":  [
+
+                                                                                 ]
+                                                              }
+                                                          ],
+                                             "parameters":  [
+                                                                {
+                                                                    "name":  "limit",
+                                                                    "in":  "query",
+                                                                    "required":  false,
+                                                                    "description":  "Number of files to return per page.",
+                                                                    "schema":  {
+                                                                                   "type":  "integer",
+                                                                                   "minimum":  1,
+                                                                                   "maximum":  100,
+                                                                                   "default":  10
+                                                                               }
+                                                                },
+                                                                {
+                                                                    "name":  "cursor",
+                                                                    "in":  "query",
+                                                                    "required":  false,
+                                                                    "description":  "Cursor returned by the previous page.",
+                                                                    "schema":  {
+                                                                                   "type":  "string"
+                                                                               }
+                                                                },
+                                                                {
+                                                                    "name":  "Accept",
+                                                                    "in":  "header",
+                                                                    "required":  false,
+                                                                    "description":  "Requested response representation.",
+                                                                    "schema":  {
+                                                                                   "type":  "string",
+                                                                                   "enum":  [
+                                                                                                "application/json",
+                                                                                                "application/xml"
+                                                                                            ]
+                                                                               }
+                                                                }
+                                                            ],
+                                             "responses":  {
+                                                               "200":  {
+                                                                           "description":  "Files retrieved successfully.",
+                                                                           "headers":  {
+                                                                                           "Cache-Control":  {
+                                                                                                                 "schema":  {
+                                                                                                                                "type":  "string",
+                                                                                                                                "example":  "private, no-cache"
+                                                                                                                            }
+                                                                                                             },
+                                                                                           "Vary":  {
+                                                                                                        "schema":  {
+                                                                                                                       "type":  "string",
+                                                                                                                       "example":  "Accept"
+                                                                                                                   }
+                                                                                                    }
+                                                                                       },
+                                                                           "content":  {
+                                                                                           "application/json":  {
+                                                                                                                    "schema":  {
+                                                                                                                                   "$ref":  "#/components/schemas/FileListResponse"
+                                                                                                                               }
+                                                                                                                },
+                                                                                           "application/xml":  {
+                                                                                                                   "schema":  {
+                                                                                                                                  "type":  "string",
+                                                                                                                                  "description":  "XML representation of the file list."
+                                                                                                                              }
+                                                                                                               }
+                                                                                       }
+                                                                       },
+                                                               "400":  {
+                                                                           "$ref":  "#/components/responses/BadRequest"
+                                                                       },
+                                                               "401":  {
+                                                                           "$ref":  "#/components/responses/Unauthorized"
+                                                                       },
+                                                               "406":  {
+                                                                           "$ref":  "#/components/responses/NotAcceptable"
+                                                                       },
+                                                               "429":  {
+                                                                           "$ref":  "#/components/responses/TooManyRequests"
+                                                                       }
+                                                           }
+                                         },
+                                 "post":  {
+                                              "tags":  [
+                                                           "Files"
+                                                       ],
+                                              "summary":  "Create file metadata",
+                                              "description":  "Creates file metadata for the authenticated user.\nThis endpoint does not upload file bytes.\nThe Idempotency-Key makes retries safe when the same key and\nrequest payload are reused.\n",
+                                              "operationId":  "createFileMetadata",
+                                              "security":  [
+                                                               {
+                                                                   "bearerAuth":  [
+
+                                                                                  ]
+                                                               }
+                                                           ],
+                                              "parameters":  [
+                                                                 {
+                                                                     "name":  "Idempotency-Key",
+                                                                     "in":  "header",
+                                                                     "required":  true,
+                                                                     "description":  "Unique key for this metadata-creation operation.",
+                                                                     "schema":  {
+                                                                                    "type":  "string",
+                                                                                    "minLength":  1,
+                                                                                    "example":  "6c85f5c9-0d2a-4c56-b8c8-7b15e7f2e654"
+                                                                                }
+                                                                 }
+                                                             ],
+                                              "requestBody":  {
+                                                                  "required":  true,
+                                                                  "content":  {
+                                                                                  "application/json":  {
+                                                                                                           "schema":  {
+                                                                                                                          "type":  "object",
+                                                                                                                          "additionalProperties":  false,
+                                                                                                                          "required":  [
+                                                                                                                                           "originalName",
+                                                                                                                                           "storageKey",
+                                                                                                                                           "sizeBytes"
+                                                                                                                                       ],
+                                                                                                                          "properties":  {
+                                                                                                                                             "originalName":  {
+                                                                                                                                                                  "type":  "string",
+                                                                                                                                                                  "minLength":  1,
+                                                                                                                                                                  "maxLength":  255,
+                                                                                                                                                                  "example":  "report.pdf"
+                                                                                                                                                              },
+                                                                                                                                             "storageKey":  {
+                                                                                                                                                                "type":  "string",
+                                                                                                                                                                "minLength":  1,
+                                                                                                                                                                "maxLength":  255,
+                                                                                                                                                                "example":  "stored-report-123"
+                                                                                                                                                            },
+                                                                                                                                             "mimeType":  {
+                                                                                                                                                              "type":  "string",
+                                                                                                                                                              "nullable":  true,
+                                                                                                                                                              "maxLength":  255,
+                                                                                                                                                              "example":  "application/pdf"
+                                                                                                                                                          },
+                                                                                                                                             "sizeBytes":  {
+                                                                                                                                                               "type":  "integer",
+                                                                                                                                                               "minimum":  0,
+                                                                                                                                                               "maximum":  9007199254740991,
+                                                                                                                                                               "example":  204800
+                                                                                                                                                           },
+                                                                                                                                             "checksum":  {
+                                                                                                                                                              "type":  "string",
+                                                                                                                                                              "nullable":  true,
+                                                                                                                                                              "maxLength":  64,
+                                                                                                                                                              "pattern":  "^[a-fA-F0-9]{64}$",
+                                                                                                                                                              "example":  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                                                                                                                                          }
+                                                                                                                                         }
+                                                                                                                      }
+                                                                                                       }
+                                                                              }
+                                                              },
+                                              "responses":  {
+                                                                "200":  {
+                                                                            "description":  "Metadata creation result or an idempotent replay, if returned by the service."
+                                                                        },
+                                                                "201":  {
+                                                                            "description":  "File metadata created successfully.",
+                                                                            "content":  {
+                                                                                            "application/json":  {
+                                                                                                                     "schema":  {
+                                                                                                                                    "$ref":  "#/components/schemas/FileMetadataResponse"
+                                                                                                                                }
+                                                                                                                 }
+                                                                                        }
+                                                                        },
+                                                                "400":  {
+                                                                            "$ref":  "#/components/responses/BadRequest"
+                                                                        },
+                                                                "401":  {
+                                                                            "$ref":  "#/components/responses/Unauthorized"
+                                                                        },
+                                                                "409":  {
+                                                                            "$ref":  "#/components/responses/Conflict"
+                                                                        },
+                                                                "429":  {
+                                                                            "$ref":  "#/components/responses/TooManyRequests"
+                                                                        },
+                                                                "503":  {
+                                                                            "$ref":  "#/components/responses/ServiceUnavailable"
+                                                                        }
+                                                            }
+                                          }
+                             },
+                  "/files/{id}":  {
+                                      "parameters":  [
+                                                         {
+                                                             "$ref":  "#/components/parameters/FileId"
+                                                         }
+                                                     ],
+                                      "get":  {
+                                                  "tags":  [
+                                                               "Files"
+                                                           ],
+                                                  "summary":  "Get file metadata",
+                                                  "description":  "Returns metadata for a file owned by the authenticated user.\nSupports ETag-based conditional requests and JSON/XML negotiation.\n",
+                                                  "operationId":  "getFileMetadata",
+                                                  "security":  [
+                                                                   {
+                                                                       "bearerAuth":  [
+
+                                                                                      ]
+                                                                   }
+                                                               ],
+                                                  "parameters":  [
+                                                                     {
+                                                                         "name":  "If-None-Match",
+                                                                         "in":  "header",
+                                                                         "required":  false,
+                                                                         "description":  "ETag from a previous response.",
+                                                                         "schema":  {
+                                                                                        "type":  "string"
+                                                                                    }
+                                                                     },
+                                                                     {
+                                                                         "name":  "Accept",
+                                                                         "in":  "header",
+                                                                         "required":  false,
+                                                                         "description":  "Requested response representation.",
+                                                                         "schema":  {
+                                                                                        "type":  "string",
+                                                                                        "enum":  [
+                                                                                                     "application/json",
+                                                                                                     "application/xml"
+                                                                                                 ]
+                                                                                    }
+                                                                     }
+                                                                 ],
+                                                  "responses":  {
+                                                                    "200":  {
+                                                                                "description":  "File metadata retrieved successfully.",
+                                                                                "headers":  {
+                                                                                                "ETag":  {
+                                                                                                             "description":  "Entity tag for conditional requests.",
+                                                                                                             "schema":  {
+                                                                                                                            "type":  "string"
+                                                                                                                        }
+                                                                                                         },
+                                                                                                "Cache-Control":  {
+                                                                                                                      "schema":  {
+                                                                                                                                     "type":  "string",
+                                                                                                                                     "example":  "private, no-cache"
+                                                                                                                                 }
+                                                                                                                  },
+                                                                                                "Vary":  {
+                                                                                                             "schema":  {
+                                                                                                                            "type":  "string",
+                                                                                                                            "example":  "Accept"
+                                                                                                                        }
+                                                                                                         }
+                                                                                            },
+                                                                                "content":  {
+                                                                                                "application/json":  {
+                                                                                                                         "schema":  {
+                                                                                                                                        "$ref":  "#/components/schemas/FileMetadataResponse"
+                                                                                                                                    }
+                                                                                                                     },
+                                                                                                "application/xml":  {
+                                                                                                                        "schema":  {
+                                                                                                                                       "type":  "string",
+                                                                                                                                       "description":  "XML representation of the file metadata."
+                                                                                                                                   }
+                                                                                                                    }
+                                                                                            }
+                                                                            },
+                                                                    "304":  {
+                                                                                "description":  "File metadata has not changed. No response body is returned.",
+                                                                                "headers":  {
+                                                                                                "ETag":  {
+                                                                                                             "schema":  {
+                                                                                                                            "type":  "string"
+                                                                                                                        }
+                                                                                                         },
+                                                                                                "Cache-Control":  {
+                                                                                                                      "schema":  {
+                                                                                                                                     "type":  "string"
+                                                                                                                                 }
+                                                                                                                  }
+                                                                                            }
+                                                                            },
+                                                                    "401":  {
+                                                                                "$ref":  "#/components/responses/Unauthorized"
+                                                                            },
+                                                                    "404":  {
+                                                                                "$ref":  "#/components/responses/NotFound"
+                                                                            },
+                                                                    "406":  {
+                                                                                "$ref":  "#/components/responses/NotAcceptable"
+                                                                            }
+                                                                }
+                                              },
+                                      "delete":  {
+                                                     "tags":  [
+                                                                  "Files"
+                                                              ],
+                                                     "summary":  "Delete a file",
+                                                     "description":  "Deletes the stored file and its database metadata.",
+                                                     "operationId":  "deleteFile",
+                                                     "security":  [
+                                                                      {
+                                                                          "bearerAuth":  [
+
+                                                                                         ]
+                                                                      }
+                                                                  ],
+                                                     "responses":  {
+                                                                       "200":  {
+                                                                                   "description":  "File deleted successfully.",
+                                                                                   "content":  {
+                                                                                                   "application/json":  {
+                                                                                                                            "schema":  {
+                                                                                                                                           "$ref":  "#/components/schemas/DeleteResponse"
+                                                                                                                                       }
+                                                                                                                        }
+                                                                                               }
+                                                                               },
+                                                                       "400":  {
+                                                                                   "$ref":  "#/components/responses/BadRequest"
+                                                                               },
+                                                                       "401":  {
+                                                                                   "$ref":  "#/components/responses/Unauthorized"
+                                                                               },
+                                                                       "404":  {
+                                                                                   "$ref":  "#/components/responses/NotFound"
+                                                                               }
+                                                                   }
+                                                 }
+                                  },
+                  "/files/{id}/content":  {
+                                              "get":  {
+                                                          "tags":  [
+                                                                       "Files"
+                                                                   ],
+                                                          "summary":  "Download a file",
+                                                          "description":  "Downloads the stored file owned by the authenticated user.",
+                                                          "operationId":  "downloadFile",
+                                                          "security":  [
+                                                                           {
+                                                                               "bearerAuth":  [
+
+                                                                                              ]
+                                                                           }
+                                                                       ],
+                                                          "parameters":  [
+                                                                             {
+                                                                                 "$ref":  "#/components/parameters/FileId"
+                                                                             }
+                                                                         ],
+                                                          "responses":  {
+                                                                            "200":  {
+                                                                                        "description":  "File downloaded successfully.",
+                                                                                        "content":  {
+                                                                                                        "application/octet-stream":  {
+                                                                                                                                         "schema":  {
+                                                                                                                                                        "type":  "string",
+                                                                                                                                                        "format":  "binary"
+                                                                                                                                                    }
+                                                                                                                                     }
+                                                                                                    }
+                                                                                    },
+                                                                            "401":  {
+                                                                                        "$ref":  "#/components/responses/Unauthorized"
+                                                                                    },
+                                                                            "404":  {
+                                                                                        "$ref":  "#/components/responses/NotFound"
+                                                                                    }
+                                                                        }
+                                                      }
+                                          },
+                  "/files/{id}/integrity":  {
+                                                "get":  {
+                                                            "tags":  [
+                                                                         "Files"
+                                                                     ],
+                                                            "summary":  "Verify file integrity",
+                                                            "description":  "Recalculates the SHA-256 checksum of the stored file and compares\nit with the saved checksum.\n",
+                                                            "operationId":  "verifyFileIntegrity",
+                                                            "security":  [
+                                                                             {
+                                                                                 "bearerAuth":  [
+
+                                                                                                ]
+                                                                             }
+                                                                         ],
+                                                            "parameters":  [
+                                                                               {
+                                                                                   "$ref":  "#/components/parameters/FileId"
+                                                                               }
+                                                                           ],
+                                                            "responses":  {
+                                                                              "200":  {
+                                                                                          "description":  "Integrity verification completed.",
+                                                                                          "content":  {
+                                                                                                          "application/json":  {
+                                                                                                                                   "schema":  {
+                                                                                                                                                  "$ref":  "#/components/schemas/IntegrityResponse"
+                                                                                                                                              }
+                                                                                                                               }
+                                                                                                      }
+                                                                                      },
+                                                                              "400":  {
+                                                                                          "$ref":  "#/components/responses/BadRequest"
+                                                                                      },
+                                                                              "401":  {
+                                                                                          "$ref":  "#/components/responses/Unauthorized"
+                                                                                      },
+                                                                              "404":  {
+                                                                                          "$ref":  "#/components/responses/NotFound"
+                                                                                      }
+                                                                          }
+                                                        }
+                                            }
+              }
+}

@@ -1,189 +1,287 @@
-
-const fileService = require("../services/fileService");
-const sendError = require("../utils/errorResponse");
-const sendNegotiatedResponse = require("../utils/contentNegotiation");
-const fs = require("fs/promises");
+const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-const UPLOAD_DIRECTORY = path.resolve(__dirname, "../../storage/uploads");
+const pool = require("../config/postgres");
+const fileService = require("../services/fileService");
+const fileRepository = require("../repositories/fileRepository");
+const sendError = require("../utils/errorResponse");
 
-function isPathInsideDirectory(directory, targetPath) {
-  const relativePath = path.relative(directory, targetPath);
+const uploadDirectory = path.resolve(
+  __dirname,
+  "../../storage/uploads"
+);
 
-  return (
-    relativePath !== "" &&
-    relativePath !== ".." &&
-    !relativePath.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relativePath)
-  );
+function getUserId(req) {
+  return req.user?.id;
 }
 
-function getStoredFilePath(storageKey) {
-  if (typeof storageKey !== "string" || storageKey.length === 0) {
+function getStoragePath(storageKey) {
+  const resolvedPath = path.resolve(uploadDirectory, storageKey);
+
+  if (path.dirname(resolvedPath) !== uploadDirectory) {
     return null;
   }
 
-  const resolvedPath = path.resolve(UPLOAD_DIRECTORY, storageKey);
-
-  return isPathInsideDirectory(UPLOAD_DIRECTORY, resolvedPath)
-    ? resolvedPath
-    : null;
+  return resolvedPath;
 }
 
-function getErrorMessage(
-  error,
-  fallback = "Request could not be completed"
+function getFileStorageKey(file) {
+  return file?.storage_key;
+}
+
+function sendNotFound(res) {
+  return sendError(
+    res,
+    404,
+    "NOT_FOUND",
+    "File not found or you do not have permission to access it"
+  );
+}
+
+// ============================================================
+// EXISTING RBAC HELPERS
+// ============================================================
+
+async function getAccessibleFile(
+  fileId,
+  user,
+  requiredPermission = "read"
 ) {
-  return error &&
-    typeof error.message === "string" &&
-    error.message.length > 0
-    ? error.message
-    : fallback;
-}
-
-// Normalize an entity tag for comparison.
-// GET and HEAD use weak comparison for If-None-Match.
-function normalizeEntityTag(value) {
-  let tag = String(value ?? "").trim();
-
-  if (tag.startsWith("W/")) {
-    tag = tag.slice(2).trim();
+  if (!user?.id || !fileId) {
+    return null;
   }
 
-  if (tag.length >= 2 && tag.startsWith('"') && tag.endsWith('"')) {
-    tag = tag.slice(1, -1);
+  if (!["read", "write"].includes(requiredPermission)) {
+    throw new Error("Invalid file permission requested");
   }
 
-  return tag;
-}
+  const result = await pool.query(
+    `SELECT
+       f.*,
+       owner.name AS owner_name,
+       owner.email AS owner_email,
+       owner.department_id AS owner_department_id,
+       requester.role AS requester_role,
+       COALESCE(s.permission, 'read') AS granted_permission,
+       s.id AS active_share_id
+     FROM files f
+     JOIN users owner
+       ON owner.id = f.owner_id
+      AND owner.organization_id = f.organization_id
+     JOIN users requester
+       ON requester.id = $2
+      AND requester.organization_id = f.organization_id
+     JOIN organizations org
+       ON org.id = requester.organization_id
+     LEFT JOIN file_shares s
+       ON s.file_id = f.id
+      AND s.organization_id = f.organization_id
+      AND s.shared_with_user_id = requester.id
+      AND s.revoked_at IS NULL
+     WHERE f.id = $1
+       AND owner.is_active = TRUE
+       AND requester.is_active = TRUE
+       AND org.is_active = TRUE
+       AND (
+         f.owner_id = requester.id
+         OR requester.role = 'admin'
+         OR (
+           requester.role = 'manager'
+           AND requester.department_id IS NOT NULL
+           AND owner.department_id = requester.department_id
+         )
+         OR s.id IS NOT NULL
+       )
+     LIMIT 1`,
+    [fileId, user.id]
+  );
 
-function ifNoneMatchMatches(headerValue, currentEtag) {
+  const file = result.rows[0];
+
+  if (!file) {
+    return null;
+  }
+
   if (
-    typeof headerValue !== "string" ||
-    headerValue.trim() === ""
+    requiredPermission === "write" &&
+    String(file.owner_id) !== String(user.id) &&
+    file.requester_role !== "admin" &&
+    file.granted_permission !== "write"
   ) {
-    return false;
+    return null;
   }
 
-  const currentTag = normalizeEntityTag(currentEtag);
-
-  return headerValue.split(",").some((candidate) => {
-    const value = candidate.trim();
-
-    return (
-      value === "*" ||
-      normalizeEntityTag(value) === currentTag
-    );
-  });
+  return file;
 }
 
-// Create file metadata with idempotency support.
+async function listFilesForManagement(
+  userId,
+  { limit = 100 } = {}
+) {
+  const safeLimit = Math.min(
+    Math.max(Number(limit) || 100, 1),
+    200
+  );
+
+  const result = await pool.query(
+    `SELECT
+       f.*,
+       owner.name AS owner_name,
+       owner.email AS owner_email
+     FROM files f
+     JOIN users owner
+       ON owner.id = f.owner_id
+      AND owner.organization_id = f.organization_id
+     JOIN users requester
+       ON requester.id = $1
+      AND requester.organization_id = f.organization_id
+     JOIN organizations org
+       ON org.id = requester.organization_id
+     WHERE requester.is_active = TRUE
+       AND owner.is_active = TRUE
+       AND org.is_active = TRUE
+       AND (
+         requester.role = 'admin'
+         OR (
+           requester.role = 'manager'
+           AND requester.department_id IS NOT NULL
+           AND owner.department_id = requester.department_id
+         )
+       )
+     ORDER BY f.created_at DESC, f.id DESC
+     LIMIT $2`,
+    [userId, safeLimit]
+  );
+
+  return result.rows;
+}
+
+async function listSharedWithUser(
+  userId,
+  { limit = 50 } = {}
+) {
+  const safeLimit = Math.min(
+    Math.max(Number(limit) || 50, 1),
+    100
+  );
+
+  const result = await pool.query(
+    `SELECT
+       f.*,
+       s.permission,
+       s.created_at AS shared_at,
+       shared_by.name AS shared_by_name,
+       shared_by.email AS shared_by_email
+     FROM file_shares s
+     JOIN files f
+       ON f.id = s.file_id
+      AND f.organization_id = s.organization_id
+     JOIN users recipient
+       ON recipient.id = s.shared_with_user_id
+      AND recipient.organization_id = s.organization_id
+     JOIN users shared_by
+       ON shared_by.id = s.shared_by
+      AND shared_by.organization_id = s.organization_id
+     JOIN organizations org
+       ON org.id = recipient.organization_id
+     WHERE s.shared_with_user_id = $1
+       AND s.revoked_at IS NULL
+       AND recipient.is_active = TRUE
+       AND shared_by.is_active = TRUE
+       AND org.is_active = TRUE
+     ORDER BY s.created_at DESC, f.id DESC
+     LIMIT $2`,
+    [userId, safeLimit]
+  );
+
+  return result.rows;
+}
+
+// ============================================================
+// CREATE FILE METADATA
+// ============================================================
+
 async function createFile(req, res, next) {
   try {
+    const ownerId = getUserId(req);
+
+    if (!ownerId) {
+      return sendError(
+        res,
+        401,
+        "UNAUTHORIZED",
+        "Authentication is required"
+      );
+    }
+
     const idempotencyKey = req.get("Idempotency-Key");
 
-    const metadata = {
-      ownerId: req.user.id,
-      originalName: req.body?.originalName,
-      storageKey: req.body?.storageKey,
-      mimeType: req.body?.mimeType,
-      sizeBytes: req.body?.sizeBytes,
-      checksum: req.body?.checksum,
-    };
+    const result = await fileService.createFileMetadataIdempotently(
+      {
+        ownerId,
+        originalName: req.body.originalName,
+        storageKey: req.body.storageKey,
+        mimeType: req.body.mimeType ?? null,
+        sizeBytes: req.body.sizeBytes,
+        checksum: req.body.checksum ?? null,
+      },
+      idempotencyKey
+    );
 
-    const result =
-      await fileService.createFileMetadataIdempotently(
-        metadata,
-        idempotencyKey
-      );
-
-    if (result?.replayed) {
+    if (result.replayed) {
       res.set("Idempotency-Replayed", "true");
     }
 
     return res.status(result.statusCode).json(result.body);
   } catch (error) {
-    const statusCode = error?.statusCode;
-
-    if ([400, 409, 503].includes(statusCode)) {
-      const defaults = {
-        400: [
-          "VALIDATION_ERROR",
-          "Invalid file metadata",
-        ],
-        409: [
-          "CONFLICT",
-          "The request conflicts with an existing resource",
-        ],
-        503: [
-          "SERVICE_UNAVAILABLE",
-          "Service temporarily unavailable",
-        ],
-      };
-
-      const [defaultCode, defaultMessage] = defaults[statusCode];
-
-      return sendError(
-        res,
-        statusCode,
-        error.code || defaultCode,
-        getErrorMessage(error, defaultMessage)
-      );
-    }
-
-    const message = getErrorMessage(
-      error,
-      "Invalid file metadata"
-    );
-
-    if (/required|must be|cannot be/i.test(message)) {
-      return sendError(
-        res,
-        400,
-        "VALIDATION_ERROR",
-        message
-      );
-    }
-
     return next(error);
   }
 }
 
-// Upload a file, calculate its checksum, and save metadata.
+// ============================================================
+// UPLOAD FILE CONTENT AND SAVE METADATA
+// ============================================================
+
 async function uploadFile(req, res, next) {
-  if (!req.file) {
-    return sendError(
-      res,
-      400,
-      "VALIDATION_ERROR",
-      "Please select a file to upload"
-    );
-  }
-
-  const uploadedFilePath = req.file.path;
-
-  if (!uploadedFilePath) {
-    return sendError(
-      res,
-      400,
-      "VALIDATION_ERROR",
-      "Uploaded file path is missing"
-    );
-  }
+  let uploadedPath;
 
   try {
-    const fileBuffer = await fs.readFile(uploadedFilePath);
+    const ownerId = getUserId(req);
 
-    const checksum = crypto
-      .createHash("sha256")
-      .update(fileBuffer)
-      .digest("hex");
+    if (!ownerId) {
+      return sendError(
+        res,
+        401,
+        "UNAUTHORIZED",
+        "Authentication is required"
+      );
+    }
+
+    if (!req.file) {
+      return sendError(
+        res,
+        400,
+        "FILE_REQUIRED",
+        "Please select a file to upload"
+      );
+    }
+
+    uploadedPath = req.file.path;
+
+    const checksum = await new Promise((resolve, reject) => {
+      const hash = crypto.createHash("sha256");
+      const stream = fs.createReadStream(uploadedPath);
+
+      stream.on("error", reject);
+      stream.on("data", (chunk) => hash.update(chunk));
+      stream.on("end", () => resolve(hash.digest("hex")));
+    });
 
     const file = await fileService.createFileMetadata({
-      ownerId: req.user.id,
-      originalName: req.file.originalname,
-      storageKey: req.file.filename,
+      ownerId,
+      originalName: path.basename(req.file.originalname),
+      storageKey: path.basename(req.file.filename),
       mimeType: req.file.mimetype,
       sizeBytes: req.file.size,
       checksum,
@@ -195,14 +293,16 @@ async function uploadFile(req, res, next) {
       data: file,
     });
   } catch (error) {
-    try {
-      await fs.unlink(uploadedFilePath);
-    } catch (cleanupError) {
-      if (cleanupError.code !== "ENOENT") {
-        console.error(
-          "Failed to remove uploaded file:",
-          cleanupError.message
-        );
+    if (uploadedPath) {
+      try {
+        await fs.promises.unlink(uploadedPath);
+      } catch (cleanupError) {
+        if (cleanupError.code !== "ENOENT") {
+          console.error(
+            "Failed to clean up uploaded file:",
+            cleanupError.message
+          );
+        }
       }
     }
 
@@ -210,340 +310,253 @@ async function uploadFile(req, res, next) {
   }
 }
 
-// Download a file owned by the authenticated user.
-async function downloadFile(req, res, next) {
+// ============================================================
+// LIST CURRENT USER'S FILES
+// ============================================================
+
+async function getUserFiles(req, res, next) {
   try {
-    const file = await fileService.getFileMetadataByOwner(
-      req.params.id,
-      req.user.id
-    );
+    const ownerId = getUserId(req);
 
-    if (!file) {
+    if (!ownerId) {
       return sendError(
         res,
-        404,
-        "NOT_FOUND",
-        "File not found"
+        401,
+        "UNAUTHORIZED",
+        "Authentication is required"
       );
     }
 
-    const filePath = getStoredFilePath(file.storage_key);
+    const limit = req.query.limit === undefined
+      ? 10
+      : Number(req.query.limit);
 
-    if (!filePath) {
-      return sendError(
-        res,
-        400,
-        "VALIDATION_ERROR",
-        "Invalid file path"
-      );
+    const cursor = req.query.cursor ?? null;
+
+    const result = await fileService.getUserFiles(ownerId, {
+      limit,
+      cursor,
+    });
+
+    const data = Array.isArray(result) ? result : result.data;
+    const pagination = Array.isArray(result)
+      ? { limit: data.length, hasMore: false, nextCursor: null }
+      : result.pagination;
+
+    const responseBody = {
+      success: true,
+      data,
+      pagination,
+    };
+
+    if (pagination.nextCursor) {
+      const query = new URLSearchParams({
+        limit: String(pagination.limit),
+        cursor: pagination.nextCursor,
+      });
+
+      responseBody.links = {
+        next: `${req.baseUrl}${req.path}?${query.toString()}`,
+      };
     }
 
-    try {
-      await fs.access(filePath);
-    } catch (error) {
-      if (error.code === "ENOENT" || error.code === "ENOTDIR") {
-        return sendError(
-          res,
-          404,
-          "NOT_FOUND",
-          "Stored file not found"
-        );
-      }
-
-      throw error;
-    }
-
-    return res.download(
-      filePath,
-      file.original_name || path.basename(filePath),
-      (error) => {
-        if (error && !res.headersSent) {
-          next(error);
-        }
-      }
-    );
+    return res.status(200).json(responseBody);
   } catch (error) {
     return next(error);
   }
 }
 
-// Delete a file owned by the authenticated user.
-async function deleteFile(req, res, next) {
+// ============================================================
+// GET FILE METADATA
+// ============================================================
+
+async function getFile(req, res, next) {
   try {
-    const file = await fileService.getFileMetadataByOwner(
+    const file = await getAccessibleFile(
       req.params.id,
-      req.user.id
+      req.user,
+      "read"
     );
 
     if (!file) {
-      return sendError(
-        res,
-        404,
-        "NOT_FOUND",
-        "File not found"
-      );
+      return sendNotFound(res);
     }
 
-    const filePath = getStoredFilePath(file.storage_key);
+    const etag = `"${file.checksum || file.id}"`;
+
+    res.set("ETag", etag);
+
+    if (req.get("If-None-Match") === etag) {
+      return res.status(304).end();
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: file,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+// ============================================================
+// DOWNLOAD FILE CONTENT
+// ============================================================
+
+async function downloadFile(req, res, next) {
+  try {
+    const file = await getAccessibleFile(
+      req.params.id,
+      req.user,
+      "read"
+    );
+
+    if (!file) {
+      return sendNotFound(res);
+    }
+
+    const storageKey = getFileStorageKey(file);
+    const filePath = storageKey && getStoragePath(storageKey);
 
     if (!filePath) {
       return sendError(
         res,
-        400,
-        "VALIDATION_ERROR",
-        "Invalid file path"
+        500,
+        "INVALID_STORAGE_KEY",
+        "The file storage key is invalid"
       );
     }
 
     try {
-      await fs.unlink(filePath);
-    } catch (error) {
-      if (error.code === "ENOENT" || error.code === "ENOTDIR") {
-        return sendError(
-          res,
-          404,
-          "NOT_FOUND",
-          "Stored file not found"
-        );
-      }
-
-      throw error;
+      await fs.promises.access(filePath, fs.constants.R_OK);
+    } catch {
+      return sendError(
+        res,
+        404,
+        "FILE_CONTENT_NOT_FOUND",
+        "File content is not available"
+      );
     }
 
-    const deleted = await fileService.removeFileMetadata(
-      req.params.id,
-      req.user.id
+    res.set("Content-Type", file.mime_type || "application/octet-stream");
+    res.set(
+      "Content-Disposition",
+      `attachment; filename*=UTF-8''${encodeURIComponent(
+        path.basename(file.original_name || "download")
+      )}`
     );
 
-    if (!deleted) {
+    return res.sendFile(filePath, (error) => {
+      if (error && !res.headersSent) {
+        next(error);
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+// ============================================================
+// VERIFY FILE INTEGRITY
+// ============================================================
+
+async function verifyFileIntegrity(req, res, next) {
+  try {
+    const file = await getAccessibleFile(
+      req.params.id,
+      req.user,
+      "read"
+    );
+
+    if (!file) {
+      return sendNotFound(res);
+    }
+
+    const storageKey = getFileStorageKey(file);
+    const filePath = storageKey && getStoragePath(storageKey);
+
+    if (!filePath) {
       return sendError(
         res,
         500,
-        "INTERNAL_SERVER_ERROR",
-        "File could not be deleted from the database"
+        "INVALID_STORAGE_KEY",
+        "The file storage key is invalid"
       );
+    }
+
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+
+    await new Promise((resolve, reject) => {
+      stream.on("data", (chunk) => hash.update(chunk));
+      stream.on("end", resolve);
+      stream.on("error", reject);
+    });
+
+    const actualChecksum = hash.digest("hex");
+    const matches = actualChecksum === file.checksum;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        fileId: file.id,
+        valid: matches,
+        expectedChecksum: file.checksum,
+        actualChecksum,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+// ============================================================
+// DELETE FILE
+// ============================================================
+
+async function deleteFile(req, res, next) {
+  try {
+    const file = await getAccessibleFile(
+      req.params.id,
+      req.user,
+      "write"
+    );
+
+    if (!file) {
+      return sendNotFound(res);
+    }
+
+    const storageKey = getFileStorageKey(file);
+    const filePath = storageKey && getStoragePath(storageKey);
+
+    // Remove metadata first so a missing content file does not
+    // prevent the metadata from being deleted.
+    const deleted = await pool.query(
+      "DELETE FROM files WHERE id = $1 RETURNING id",
+      [file.id]
+    );
+
+    if (deleted.rowCount === 0) {
+      return sendNotFound(res);
+    }
+
+    if (filePath) {
+      try {
+        await fs.promises.unlink(filePath);
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          console.error(
+            "Failed to remove file content:",
+            error.message
+          );
+        }
+      }
     }
 
     return res.status(200).json({
       success: true,
       message: "File deleted successfully",
-    });
-  } catch (error) {
-    return next(error);
-  }
-}
-
-// Get metadata for one file owned by the authenticated user.
-async function getFile(req, res, next) {
-  try {
-    const file = await fileService.getFileMetadataByOwner(
-      req.params.id,
-      req.user.id
-    );
-
-    if (!file) {
-      return sendError(
-        res,
-        404,
-        "NOT_FOUND",
-        "File not found"
-      );
-    }
-
-    const responseBody = {
-      success: true,
-      data: file,
-    };
-
-    const etag = `"${crypto
-      .createHash("sha256")
-      .update(JSON.stringify(responseBody))
-      .digest("hex")}"`;
-
-    res.set("Cache-Control", "private, no-cache");
-    res.set("ETag", etag);
-    res.vary("Accept");
-
-    const ifNoneMatch = req.get("If-None-Match");
-
-    if (ifNoneMatchMatches(ifNoneMatch, etag)) {
-      return res.status(304).end();
-    }
-
-    return sendNegotiatedResponse(
-      req,
-      res,
-      200,
-      responseBody
-    );
-  } catch (error) {
-    return next(error);
-  }
-}
-
-// Get files belonging to the authenticated user with cursor pagination.
-async function getUserFiles(req, res, next) {
-  try {
-    const rawLimit = req.query.limit ?? "10";
-
-    if (
-      typeof rawLimit !== "string" ||
-      !/^\d+$/.test(rawLimit)
-    ) {
-      return sendError(
-        res,
-        400,
-        "VALIDATION_ERROR",
-        "Limit must be a positive integer between 1 and 100"
-      );
-    }
-
-    const limit = Number(rawLimit);
-
-    if (
-      !Number.isSafeInteger(limit) ||
-      limit < 1 ||
-      limit > 100
-    ) {
-      return sendError(
-        res,
-        400,
-        "VALIDATION_ERROR",
-        "Limit must be a positive integer between 1 and 100"
-      );
-    }
-
-    const cursor = req.query.cursor ?? null;
-
-    const result = await fileService.getUserFiles(
-      req.user.id,
-      { limit, cursor }
-    );
-
-    const data = Array.isArray(result?.data)
-      ? result.data
-      : [];
-
-    const pagination = result?.pagination || {};
-
-    let nextLink = null;
-
-    if (pagination.hasMore && pagination.nextCursor) {
-      const params = new URLSearchParams({
-        limit: String(pagination.limit ?? limit),
-        cursor: String(pagination.nextCursor),
-      });
-
-      nextLink = `/api/v1/files?${params.toString()}`;
-    }
-
-    res.set("Cache-Control", "private, no-cache");
-    res.vary("Accept");
-
-    return sendNegotiatedResponse(req, res, 200, {
-      success: true,
-      count: data.length,
-      data,
-      pagination: {
-        limit: pagination.limit ?? limit,
-        hasMore: Boolean(pagination.hasMore),
-        nextCursor: pagination.nextCursor ?? null,
-      },
-      links: {
-        next: nextLink,
-      },
-    });
-  } catch (error) {
-    if (error?.statusCode === 400) {
-      return sendError(
-        res,
-        400,
-        error.code || "VALIDATION_ERROR",
-        getErrorMessage(
-          error,
-          "Invalid pagination parameters"
-        )
-      );
-    }
-
-    return next(error);
-  }
-}
-
-// Verify file integrity using its SHA-256 checksum.
-async function verifyFileIntegrity(req, res, next) {
-  try {
-    const file = await fileService.getFileMetadataByOwner(
-      req.params.id,
-      req.user.id
-    );
-
-    if (!file) {
-      return sendError(
-        res,
-        404,
-        "NOT_FOUND",
-        "File not found"
-      );
-    }
-
-    if (!file.checksum) {
-      return sendError(
-        res,
-        400,
-        "VALIDATION_ERROR",
-        "No checksum available for this file"
-      );
-    }
-
-    const filePath = getStoredFilePath(file.storage_key);
-
-    if (!filePath) {
-      return sendError(
-        res,
-        400,
-        "VALIDATION_ERROR",
-        "Invalid file path"
-      );
-    }
-
-    let fileBuffer;
-
-    try {
-      fileBuffer = await fs.readFile(filePath);
-    } catch (error) {
-      if (
-        error.code === "ENOENT" ||
-        error.code === "ENOTDIR"
-      ) {
-        return sendError(
-          res,
-          404,
-          "NOT_FOUND",
-          "Stored file not found"
-        );
-      }
-
-      throw error;
-    }
-
-    const currentChecksum = crypto
-      .createHash("sha256")
-      .update(fileBuffer)
-      .digest("hex");
-
-    const isIntact = currentChecksum === file.checksum;
-
-    return res.status(200).json({
-      success: true,
-      message: isIntact
-        ? "File integrity verified successfully"
-        : "File integrity verification failed",
-      data: {
-        fileId: file.id,
-        originalName: file.original_name,
-        integrity: isIntact ? "verified" : "failed",
-      },
+      data: { id: file.id },
     });
   } catch (error) {
     return next(error);
@@ -553,9 +566,12 @@ async function verifyFileIntegrity(req, res, next) {
 module.exports = {
   createFile,
   uploadFile,
-  downloadFile,
-  deleteFile,
-  getFile,
   getUserFiles,
+  getFile,
+  downloadFile,
   verifyFileIntegrity,
+  deleteFile,
+  getAccessibleFile,
+  listFilesForManagement,
+  listSharedWithUser,
 };

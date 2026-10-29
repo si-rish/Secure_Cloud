@@ -2,24 +2,64 @@ const jwt = require("jsonwebtoken");
 const sendError = require("../utils/errorResponse");
 
 function authMiddleware(req, res, next) {
-  try {
-    const authHeader = req.headers.authorization;
+  const authHeader = req.headers.authorization;
 
-    // Check whether the token exists
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  if (
+    typeof authHeader !== "string" ||
+    !authHeader.startsWith("Bearer ")
+  ) {
+    return sendError(
+      res,
+      401,
+      "UNAUTHORIZED",
+      "Authentication token is required"
+    );
+  }
+
+  const token = authHeader.slice(7).trim();
+
+  if (!token) {
+    return sendError(
+      res,
+      401,
+      "UNAUTHORIZED",
+      "Authentication token is required"
+    );
+  }
+
+  if (!process.env.JWT_SECRET) {
+    return next(new Error("JWT_SECRET is not configured"));
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+      issuer: process.env.JWT_ISSUER || "securecloud",
+      audience: process.env.JWT_AUDIENCE || "securecloud-users",
+      algorithms: ["HS256"],
+    });
+
+    const userId = decoded.sub || decoded.id;
+
+    if (typeof userId !== "string" || !userId.trim()) {
       return sendError(
         res,
         401,
         "UNAUTHORIZED",
-        "Authentication token is required"
+        "Invalid authentication token payload"
       );
     }
 
-    // Extract the JWT
-    const token = authHeader.split(" ")[1];
+    req.user = {
+      id: userId,
+    };
 
-    // Reject an empty token
-    if (!token) {
+    return next();
+  } catch (error) {
+    if (
+      error.name === "TokenExpiredError" ||
+      error.name === "JsonWebTokenError" ||
+      error.name === "NotBeforeError"
+    ) {
       return sendError(
         res,
         401,
@@ -28,26 +68,7 @@ function authMiddleware(req, res, next) {
       );
     }
 
-    // Verify the token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET, {
-      issuer: "securecloud",
-      audience: "securecloud-api",
-    });
-
-    // Attach authenticated user information
-    req.user = {
-      id: decoded.id,
-      role: decoded.role,
-    };
-
-    next();
-  } catch (error) {
-    return sendError(
-      res,
-      401,
-      "UNAUTHORIZED",
-      "Invalid or expired authentication token"
-    );
+    return next(error);
   }
 }
 

@@ -1,6 +1,6 @@
 const pool = require("../config/postgres");
 
-// Create file metadata.
+// Create file metadata and derive organization from the owner.
 async function createFile(
   {
     ownerId,
@@ -15,13 +15,24 @@ async function createFile(
   const query = `
     INSERT INTO files (
       owner_id,
+      organization_id,
       original_name,
       storage_key,
       mime_type,
       size_bytes,
       checksum
     )
-    VALUES ($1, $2, $3, $4, $5, $6)
+    SELECT
+      u.id,
+      u.organization_id,
+      $2,
+      $3,
+      $4,
+      $5,
+      $6
+    FROM users u
+    WHERE u.id = $1
+      AND u.is_active = TRUE
     RETURNING *;
   `;
 
@@ -35,6 +46,15 @@ async function createFile(
   ];
 
   const result = await dbClient.query(query, values);
+
+  if (result.rowCount === 0) {
+    const error = new Error(
+      "File owner does not exist or is inactive"
+    );
+    error.statusCode = 403;
+    error.code = "FILE_OWNER_UNAVAILABLE";
+    throw error;
+  }
 
   return result.rows[0];
 }
@@ -104,7 +124,8 @@ async function findFileByIdAndOwner(fileId, ownerId) {
   const query = `
     SELECT *
     FROM files
-    WHERE id = $1 AND owner_id = $2;
+    WHERE id = $1
+      AND owner_id = $2;
   `;
 
   const result = await pool.query(query, [fileId, ownerId]);

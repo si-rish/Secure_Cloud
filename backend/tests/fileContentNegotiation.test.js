@@ -13,6 +13,12 @@ jest.mock("../src/middleware/authMiddleware", () =>
   }
 );
 
+jest.mock("../src/middleware/loadCurrentUser", () =>
+  (req, res, next) => {
+    next();
+  }
+);
+
 const fileService = require("../src/services/fileService");
 const fileRoutes = require("../src/routes/fileRoutes");
 
