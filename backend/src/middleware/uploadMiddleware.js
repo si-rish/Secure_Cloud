@@ -8,12 +8,17 @@ const fileTypeFromFile = (...args) =>
     module.fileTypeFromFile(...args)
   );
 
-const uploadDirectory = path.resolve(
-  __dirname,
-  "../../storage/uploads"
+const storageRoot = path.resolve(
+  process.env.STORAGE_ROOT ||
+  path.resolve(__dirname, "../../SecureCloud_Storage")
 );
 
-fs.mkdirSync(uploadDirectory, { recursive: true });
+const legacyUploadDirectory = path.join(
+  storageRoot,
+  "uploads"
+);
+
+fs.mkdirSync(legacyUploadDirectory, { recursive: true });
 
 const allowedTypes = {
   ".pdf": ["application/pdf"],
@@ -25,8 +30,50 @@ const allowedTypes = {
 
 const storage = multer.diskStorage({
   destination: (req, file, callback) => {
-    callback(null, uploadDirectory);
-  },
+  try {
+    const { id, organizationId, role } = req.user || {};
+
+    if (!id || !organizationId || !role) {
+      return callback(new Error("Invalid user storage information"));
+    }
+
+    const roleFolder = {
+      admin: "Admins",
+      manager: "Managers",
+      user: "Users",
+    }[role];
+
+    if (!roleFolder) {
+      return callback(new Error("Invalid user role"));
+    }
+
+    const extension = path
+  .extname(file.originalname)
+  .toLowerCase();
+
+const category =
+  [".pdf", ".txt", ".doc", ".docx"].includes(extension)
+    ? "Documents"
+    : [".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(extension)
+      ? "Images"
+      : "Other";
+
+const userDirectory = path.join(
+  storageRoot,
+  "Organizations",
+  String(organizationId),
+  roleFolder,
+  String(id),
+  category
+);
+
+fs.mkdirSync(userDirectory, { recursive: true });
+
+callback(null, userDirectory);
+  } catch (error) {
+    callback(error);
+  }
+},
 
   filename: (req, file, callback) => {
     const extension = path

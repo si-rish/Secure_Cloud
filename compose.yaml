@@ -48,10 +48,11 @@ services:
       POSTGRES_DB: securecloud
       POSTGRES_USER: securecloud_user
       MONGODB_URI: mongodb://mongodb:27017/securecloud
+      STORAGE_ROOT: /app/SecureCloud_Storage
     ports:
       - "5001:5000"
     volumes:
-      - ./backend/storage/uploads:/app/storage/uploads
+    - ./backend/SecureCloud_Storage:/app/SecureCloud_Storage
     depends_on:
       postgres:
         condition: service_healthy

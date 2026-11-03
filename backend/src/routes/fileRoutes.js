@@ -6,59 +6,73 @@ const authMiddleware = require("../middleware/authMiddleware");
 const loadCurrentUser = require("../middleware/loadCurrentUser");
 const validateRequest = require("../middleware/validateRequest");
 const idempotencyMiddleware = require("../middleware/idempotencyMiddleware");
+const requireRoles = require("../middleware/requireRoles");
 
 const { createFileSchema } = require("../schemas/fileSchemas");
-
 const {
-  upload,
-  validateActualFileType,
+upload,
+validateActualFileType,
 } = require("../middleware/uploadMiddleware");
 
 const fileController = require("../controllers/fileController");
 
-// All file routes require a valid JWT and an active database account.
+// All file routes require authentication and an active database account.
 router.use(authMiddleware);
 router.use(loadCurrentUser);
 
-// File responses contain private user data.
-router.use((req, res, next) => {
-  if (req.method === "GET") {
-    res.set("Cache-Control", "private, no-cache");
-  }
+// Storage analytics — administrators only
+router.get(
+  "/storage/summary",
+  requireRoles("admin"),
+  fileController.getStorageSummary
+);
 
-  next();
+// Private file responses must not be cached publicly.
+router.use((req, res, next) => {
+if (req.method === "GET") {
+res.set("Cache-Control", "private, no-cache");
+}
+
+next();
 });
 
 // Upload file content.
-// POST /api/v1/files/content
 router.post(
-  "/content",
-  upload.single("file"),
-  validateActualFileType,
-  fileController.uploadFile
+"/content",
+upload.single("file"),
+validateActualFileType,
+fileController.uploadFile
 );
 
 // Create file metadata.
-// POST /api/v1/files
 router.post(
-  "/",
-  idempotencyMiddleware,
-  validateRequest(createFileSchema),
-  fileController.createFile
+"/",
+idempotencyMiddleware,
+validateRequest(createFileSchema),
+fileController.createFile
 );
 
-// List accessible files.
-// The controller must restrict results to the current user's permissions.
+// List files accessible to the current user.
+// Admins receive organization-wide file listings.
 router.get("/", fileController.getUserFiles);
+
+// Organization audit logs — administrators only
+router.get(
+  "/audit/logs",
+  requireRoles("admin"),
+  fileController.getFileAuditLogs
+);
 
 // Download file content.
 router.get("/:id/content", fileController.downloadFile);
+
+router.get("/:id/preview", fileController.previewFile);
+
 
 // Verify file integrity.
 router.get("/:id/integrity", fileController.verifyFileIntegrity);
 
 // Delete a file.
-// The controller must enforce owner/admin deletion rules.
 router.delete("/:id", fileController.deleteFile);
 
 // Get file metadata.

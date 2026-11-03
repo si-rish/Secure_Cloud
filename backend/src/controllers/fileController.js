@@ -6,10 +6,74 @@ const pool = require("../config/postgres");
 const fileService = require("../services/fileService");
 const fileRepository = require("../repositories/fileRepository");
 const sendError = require("../utils/errorResponse");
+// ============================================================
+// FILE AUDIT LOGGING
+// ============================================================
 
-const uploadDirectory = path.resolve(
-  __dirname,
-  "../../storage/uploads"
+async function logFileAudit({
+  file,
+  actorUserId,
+  eventType,
+  targetUserId = null,
+  details = {},
+}) {
+  if (!file?.id || !file?.organization_id || !actorUserId) {
+    throw new Error("Insufficient information to create file audit log");
+  }
+
+  const actorResult = await pool.query(
+    `SELECT id, name, email, organization_id
+     FROM users
+     WHERE id = $1
+       AND is_active = TRUE
+     LIMIT 1`,
+    [actorUserId]
+  );
+
+  const actor = actorResult.rows[0];
+
+  if (
+    !actor ||
+    String(actor.organization_id) !== String(file.organization_id)
+  ) {
+    throw new Error("Invalid file audit actor");
+  }
+
+  await pool.query(
+    `INSERT INTO file_audit_logs (
+      organization_id,
+      file_id,
+      file_name,
+      actor_user_id,
+      actor_name,
+      actor_email,
+      event_type,
+      target_user_id,
+      details
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+    [
+      file.organization_id,
+      file.id,
+      file.original_name,
+      actor.id,
+      actor.name,
+      actor.email,
+      eventType,
+      targetUserId,
+      JSON.stringify(details),
+    ]
+  );
+}
+
+const storageRoot = path.resolve(
+  process.env.STORAGE_ROOT ||
+  path.resolve(__dirname, "../../SecureCloud_Storage")
+);
+
+const legacyUploadDirectory = path.join(
+  storageRoot,
+  "uploads"
 );
 
 function getUserId(req) {
@@ -17,9 +81,35 @@ function getUserId(req) {
 }
 
 function getStoragePath(storageKey) {
-  const resolvedPath = path.resolve(uploadDirectory, storageKey);
+  if (!storageKey || typeof storageKey !== "string") {
+    return null;
+  }
 
-  if (path.dirname(resolvedPath) !== uploadDirectory) {
+  // Legacy files were stored directly in storage/uploads.
+  if (!storageKey.includes("/") && !storageKey.includes("\\")) {
+    const legacyPath = path.resolve(
+      legacyUploadDirectory,
+      storageKey
+    );
+
+    if (
+      path.relative(legacyUploadDirectory, legacyPath).startsWith("..") ||
+      path.isAbsolute(path.relative(legacyUploadDirectory, legacyPath))
+    ) {
+      return null;
+    }
+
+    return legacyPath;
+  }
+
+  // New files use organization-based relative storage paths.
+  const resolvedPath = path.resolve(storageRoot, storageKey);
+  const relativePath = path.relative(storageRoot, resolvedPath);
+
+  if (
+    relativePath.startsWith("..") ||
+    path.isAbsolute(relativePath)
+  ) {
     return null;
   }
 
@@ -84,15 +174,10 @@ async function getAccessibleFile(
        AND requester.is_active = TRUE
        AND org.is_active = TRUE
        AND (
-         f.owner_id = requester.id
-         OR requester.role = 'admin'
-         OR (
-           requester.role = 'manager'
-           AND requester.department_id IS NOT NULL
-           AND owner.department_id = requester.department_id
-         )
-         OR s.id IS NOT NULL
-       )
+  f.owner_id = requester.id
+  OR requester.role = 'admin'
+  OR s.id IS NOT NULL
+)
      LIMIT 1`,
     [fileId, user.id]
   );
@@ -278,13 +363,26 @@ async function uploadFile(req, res, next) {
       stream.on("end", () => resolve(hash.digest("hex")));
     });
 
-    const file = await fileService.createFileMetadata({
+    const file = await fileService.createFileMetadataWithQuota({
       ownerId,
       originalName: path.basename(req.file.originalname),
-      storageKey: path.basename(req.file.filename),
+      storageKey: path
+        .relative(storageRoot, req.file.path)
+        .split(path.sep)
+        .join("/"),
       mimeType: req.file.mimetype,
       sizeBytes: req.file.size,
       checksum,
+    });
+
+    await logFileAudit({
+      file,
+      actorUserId: ownerId,
+      eventType: "upload",
+      details: {
+        fileSize: req.file.size,
+        mimeType: req.file.mimetype,
+      },
     });
 
     return res.status(201).json({
@@ -316,9 +414,10 @@ async function uploadFile(req, res, next) {
 
 async function getUserFiles(req, res, next) {
   try {
-    const ownerId = getUserId(req);
+    const user = req.user;
 
-    if (!ownerId) {
+
+    if (!user?.id) {
       return sendError(
         res,
         401,
@@ -327,40 +426,72 @@ async function getUserFiles(req, res, next) {
       );
     }
 
-    const limit = req.query.limit === undefined
-      ? 10
-      : Number(req.query.limit);
+    const limit =
+      req.query.limit === undefined
+        ? 10
+        : Number(req.query.limit);
 
-    const cursor = req.query.cursor ?? null;
-
-    const result = await fileService.getUserFiles(ownerId, {
-      limit,
-      cursor,
-    });
-
-    const data = Array.isArray(result) ? result : result.data;
-    const pagination = Array.isArray(result)
-      ? { limit: data.length, hasMore: false, nextCursor: null }
-      : result.pagination;
-
-    const responseBody = {
-      success: true,
-      data,
-      pagination,
-    };
-
-    if (pagination.nextCursor) {
-      const query = new URLSearchParams({
-        limit: String(pagination.limit),
-        cursor: pagination.nextCursor,
-      });
-
-      responseBody.links = {
-        next: `${req.baseUrl}${req.path}?${query.toString()}`,
-      };
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      return sendError(
+        res,
+        400,
+        "INVALID_LIMIT",
+        "Limit must be between 1 and 200"
+      );
     }
 
-    return res.status(200).json(responseBody);
+    let files;
+
+    // Administrators can see all files in their organization.
+    if (user.role === "admin") {
+      files = await listFilesForManagement(user.id, { limit });
+    } else {
+      // Managers and users see their own files
+      // plus files explicitly shared with them.
+      const result = await pool.query(
+        `SELECT
+       f.*,
+       owner.name AS owner_name,
+       owner.email AS owner_email,
+       s.permission AS shared_permission
+     FROM files f
+     JOIN users owner
+       ON owner.id = f.owner_id
+      AND owner.organization_id = f.organization_id
+     JOIN users requester
+       ON requester.id = $1
+      AND requester.organization_id = f.organization_id
+     JOIN organizations org
+       ON org.id = requester.organization_id
+     LEFT JOIN file_shares s
+       ON s.file_id = f.id
+      AND s.organization_id = f.organization_id
+      AND s.shared_with_user_id = requester.id
+      AND s.revoked_at IS NULL
+     WHERE requester.is_active = TRUE
+       AND owner.is_active = TRUE
+       AND org.is_active = TRUE
+       AND (
+         f.owner_id = requester.id
+         OR s.id IS NOT NULL
+       )
+     ORDER BY f.created_at DESC, f.id DESC
+     LIMIT $2`,
+        [user.id, limit]
+      );
+
+      files = result.rows;
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        files,
+        total: files.length,
+      },
+    });
+
+
   } catch (error) {
     return next(error);
   }
@@ -438,7 +569,14 @@ async function downloadFile(req, res, next) {
       );
     }
 
+    await logFileAudit({
+      file,
+      actorUserId: req.user.id,
+      eventType: "download",
+    });
+
     res.set("Content-Type", file.mime_type || "application/octet-stream");
+
     res.set(
       "Content-Disposition",
       `attachment; filename*=UTF-8''${encodeURIComponent(
@@ -456,6 +594,63 @@ async function downloadFile(req, res, next) {
   }
 }
 
+// ============================================================
+// PREVIEW FILE
+// ============================================================
+
+async function previewFile(req, res, next) {
+  try {
+    const file = await getAccessibleFile(
+      req.params.id,
+      req.user,
+      "read"
+    );
+
+    if (!file) {
+      return sendNotFound(res);
+    }
+
+    const storageKey = getFileStorageKey(file);
+    const filePath = storageKey && getStoragePath(storageKey);
+
+    if (!filePath) {
+      return sendError(
+        res,
+        500,
+        "INVALID_STORAGE_KEY",
+        "The file storage key is invalid"
+      );
+    }
+
+    try {
+      await fs.promises.access(filePath, fs.constants.R_OK);
+    } catch {
+      return sendError(
+        res,
+        404,
+        "FILE_CONTENT_NOT_FOUND",
+        "File content is not available"
+      );
+    }
+
+    await logFileAudit({
+      file,
+      actorUserId: req.user.id,
+      eventType: "preview",
+    });
+
+    res.set("Content-Type", file.mime_type || "application/octet-stream");
+    res.set("Content-Disposition", "inline");
+
+    return res.sendFile(filePath, (error) => {
+      if (error && !res.headersSent) {
+        next(error);
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
 // ============================================================
 // VERIFY FILE INTEGRITY
 // ============================================================
@@ -529,8 +724,16 @@ async function deleteFile(req, res, next) {
     const storageKey = getFileStorageKey(file);
     const filePath = storageKey && getStoragePath(storageKey);
 
-    // Remove metadata first so a missing content file does not
-    // prevent the metadata from being deleted.
+    // Record deletion before removing the metadata.
+    await logFileAudit({
+      file,
+      actorUserId: req.user.id,
+      eventType: "delete",
+      details: {
+        originalName: file.original_name,
+      },
+    });
+
     const deleted = await pool.query(
       "DELETE FROM files WHERE id = $1 RETURNING id",
       [file.id]
@@ -563,6 +766,224 @@ async function deleteFile(req, res, next) {
   }
 }
 
+// ============================================================
+// ADMIN FILE AUDIT HISTORY
+// ============================================================
+
+async function getFileAuditLogs(req, res, next) {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return sendError(
+        res,
+        401,
+        "UNAUTHORIZED",
+        "Authentication is required"
+      );
+    }
+
+    const limit =
+      req.query.limit === undefined
+        ? 50
+        : Number(req.query.limit);
+
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      return sendError(
+        res,
+        400,
+        "INVALID_LIMIT",
+        "Limit must be between 1 and 200"
+      );
+    }
+
+    const values = [userId, limit];
+
+    let filters = "";
+
+    if (req.query.eventType) {
+      const allowedEvents = [
+        "upload",
+        "modify",
+        "download",
+        "delete",
+        "share",
+        "unshare",
+        "permission_change",
+      ];
+
+      if (!allowedEvents.includes(req.query.eventType)) {
+        return sendError(
+          res,
+          400,
+          "INVALID_EVENT_TYPE",
+          "Invalid audit event type"
+        );
+      }
+
+      values.push(req.query.eventType);
+      filters += ` AND logs.event_type = $${values.length}`;
+    }
+
+    if (req.query.fileId) {
+      values.push(req.query.fileId);
+      filters += ` AND logs.file_id = $${values.length}`;
+    }
+
+    const result = await pool.query(
+      `SELECT
+         logs.id,
+         logs.file_id,
+         logs.file_name,
+         logs.actor_user_id,
+         logs.actor_name,
+         logs.actor_email,
+         logs.event_type,
+         logs.target_user_id,
+         logs.details,
+         logs.created_at
+       FROM file_audit_logs logs
+       JOIN users requester
+         ON requester.id = $1
+        AND requester.organization_id = logs.organization_id
+       JOIN organizations org
+         ON org.id = requester.organization_id
+       WHERE requester.is_active = TRUE
+         AND requester.role = 'admin'
+         AND org.is_active = TRUE
+         ${filters}
+       ORDER BY logs.created_at DESC, logs.id DESC
+       LIMIT $2`,
+      values
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        logs: result.rows,
+        total: result.rows.length,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+
+// ============================================================
+// STORAGE ANALYTICS
+// ============================================================
+
+async function getStorageSummary(req, res, next) {
+  try {
+    const organizationId = req.user?.organizationId;
+
+    if (!organizationId) {
+      return sendError(
+        res,
+        403,
+        "ORGANIZATION_REQUIRED",
+        "Organization information is required"
+      );
+    }
+
+    const [summary, users, fileTypes, largestFiles] =
+      await Promise.all([
+        pool.query(
+          `SELECT
+             o.storage_quota_bytes,
+             COALESCE(SUM(f.size_bytes), 0)::text AS used_bytes,
+             COUNT(f.id)::int AS total_files
+           FROM organizations o
+           LEFT JOIN files f ON f.organization_id = o.id
+           WHERE o.id = $1
+           GROUP BY o.id`,
+          [organizationId]
+        ),
+
+        pool.query(
+          `SELECT
+             u.id,
+             u.name,
+             u.email,
+             COALESCE(SUM(f.size_bytes), 0)::text AS used_bytes,
+             COUNT(f.id)::int AS total_files
+           FROM users u
+           LEFT JOIN files f
+             ON f.owner_id = u.id
+            AND f.organization_id = u.organization_id
+           WHERE u.organization_id = $1
+           GROUP BY u.id, u.name, u.email
+           ORDER BY SUM(f.size_bytes) DESC NULLS LAST`,
+          [organizationId]
+        ),
+
+        pool.query(
+          `SELECT
+             COALESCE(mime_type, 'Unknown') AS file_type,
+             COUNT(*)::int AS total_files,
+             COALESCE(SUM(size_bytes), 0)::text AS used_bytes
+           FROM files
+           WHERE organization_id = $1
+           GROUP BY mime_type
+           ORDER BY SUM(size_bytes) DESC`,
+          [organizationId]
+        ),
+
+        pool.query(
+          `SELECT
+             f.id,
+             f.original_name,
+             f.size_bytes,
+             f.mime_type,
+             u.name AS owner_name
+           FROM files f
+           JOIN users u ON u.id = f.owner_id
+           WHERE f.organization_id = $1
+           ORDER BY f.size_bytes DESC
+           LIMIT 5`,
+          [organizationId]
+        )
+      ]);
+
+    const data = summary.rows[0];
+
+    if (!data) {
+      return sendError(
+        res,
+        404,
+        "ORGANIZATION_NOT_FOUND",
+        "Organization not found"
+      );
+    }
+
+    const quota = BigInt(data.storage_quota_bytes || 0);
+    const used = BigInt(data.used_bytes || 0);
+    const available = quota > used ? quota - used : 0n;
+
+    const usagePercentage = quota > 0n
+      ? Number((used * 10000n) / quota) / 100
+      : 0;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        allocatedBytes: quota.toString(),
+        usedBytes: used.toString(),
+        availableBytes: available.toString(),
+        usagePercentage,
+        totalFiles: data.total_files,
+        users: users.rows,
+        fileTypes: fileTypes.rows,
+        largestFiles: largestFiles.rows
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createFile,
   uploadFile,
@@ -574,4 +995,7 @@ module.exports = {
   getAccessibleFile,
   listFilesForManagement,
   listSharedWithUser,
+  getFileAuditLogs,
+  previewFile,
+  getStorageSummary,
 };

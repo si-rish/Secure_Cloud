@@ -1,4 +1,6 @@
 const pool = require("../config/postgres");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
 
 // Helper: send consistent error responses
 function handleError(res, error) {
@@ -30,6 +32,66 @@ function getUser(req) {
 
 function getOrganizationId(req) {
   return getUser(req)?.organizationId;
+}
+
+
+async function createFileAuditLog(
+  db,
+  {
+    organizationId,
+    fileId,
+    fileName,
+    actor,
+    eventType,
+    targetUserId = null,
+    details = {},
+  }
+) {
+  // Get the actor's actual details from PostgreSQL.
+  const actorResult = await db.query(
+    `SELECT id, name, email
+     FROM users
+     WHERE id = $1
+       AND organization_id = $2
+       AND is_active = TRUE`,
+    [actor.id, organizationId]
+  );
+
+  if (!actorResult.rows.length) {
+    throw new Error("Unable to identify the audit log actor.");
+  }
+
+  const actorDetails = actorResult.rows[0];
+  const actorName =
+    actorDetails.name?.trim() ||
+    actorDetails.email?.trim() ||
+    `User ${actorDetails.id}`;
+
+  await db.query(
+    `INSERT INTO file_audit_logs (
+      organization_id,
+      file_id,
+      file_name,
+      actor_user_id,
+      actor_name,
+      actor_email,
+      event_type,
+      target_user_id,
+      details
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      organizationId,
+      fileId,
+      fileName,
+      actorDetails.id,
+      actorName,
+      actorDetails.email || null,
+      eventType,
+      targetUserId,
+      JSON.stringify(details),
+    ]
+  );
 }
 
 // PROFILE
@@ -85,10 +147,175 @@ async function updateProfile(req, res) {
 
 // ORGANIZATION
 
+const STORAGE_PLANS = {
+  Basic: 1n * 1024n * 1024n * 1024n,
+  Business: 10n * 1024n * 1024n * 1024n,
+  Enterprise: 100n * 1024n * 1024n * 1024n,
+};
+
+async function getStoragePlan(req, res) {
+  try {
+    const result = await pool.query(
+      `SELECT
+         o.storage_plan,
+         o.storage_quota_bytes,
+         COALESCE(SUM(f.size_bytes), 0)::text AS used_bytes
+       FROM organizations o
+       LEFT JOIN files f ON f.organization_id = o.id
+       WHERE o.id = $1
+       GROUP BY o.id`,
+      [getOrganizationId(req)]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found.",
+      });
+    }
+
+    const row = result.rows[0];
+    const quota = BigInt(row.storage_quota_bytes);
+    const used = BigInt(row.used_bytes);
+
+    return res.json({
+      success: true,
+      data: {
+        plan: row.storage_plan,
+        quotaBytes: quota.toString(),
+        usedBytes: used.toString(),
+        availableBytes: (quota > used ? quota - used : 0n).toString(),
+        plans: {
+          Basic: STORAGE_PLANS.Basic.toString(),
+          Business: STORAGE_PLANS.Business.toString(),
+          Enterprise: STORAGE_PLANS.Enterprise.toString(),
+        },
+      },
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function updateStoragePlan(req, res) {
+  const client = await pool.connect();
+
+  try {
+    const { plan, customQuotaBytes } = req.body;
+    const organizationId = getOrganizationId(req);
+    const actorId = getUser(req).id;
+
+    let newQuota;
+
+    if (plan === "Custom") {
+      if (
+        !/^[1-9]\d*$/.test(String(customQuotaBytes)) ||
+        BigInt(customQuotaBytes) > BigInt(Number.MAX_SAFE_INTEGER)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "A valid custom quota in bytes is required.",
+        });
+      }
+
+      newQuota = BigInt(customQuotaBytes);
+    } else if (STORAGE_PLANS[plan]) {
+      newQuota = STORAGE_PLANS[plan];
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid storage plan.",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    const organization = await client.query(
+      `SELECT storage_plan, storage_quota_bytes
+       FROM organizations
+       WHERE id = $1 AND is_active = TRUE
+       FOR UPDATE`,
+      [organizationId]
+    );
+
+    if (!organization.rows.length) {
+      throw Object.assign(new Error("Organization not found."), {
+        statusCode: 404,
+      });
+    }
+
+    const current = organization.rows[0];
+
+    const usage = await client.query(
+      `SELECT COALESCE(SUM(size_bytes), 0)::text AS used_bytes
+       FROM files WHERE organization_id = $1`,
+      [organizationId]
+    );
+
+    const used = BigInt(usage.rows[0].used_bytes);
+
+    if (newQuota < used) {
+      await client.query("ROLLBACK");
+
+      return res.status(409).json({
+        success: false,
+        message: "Cannot reduce quota below current storage usage.",
+        data: {
+          usedBytes: used.toString(),
+          requestedQuotaBytes: newQuota.toString(),
+        },
+      });
+    }
+
+    await client.query(
+      `UPDATE organizations
+       SET storage_plan = $1,
+           storage_quota_bytes = $2,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [plan, newQuota.toString(), organizationId]
+    );
+
+    await client.query(
+      `INSERT INTO organization_storage_history (
+         organization_id, previous_plan, new_plan,
+         previous_quota_bytes, new_quota_bytes, changed_by
+       )
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        organizationId,
+        current.storage_plan,
+        plan,
+        current.storage_quota_bytes,
+        newQuota.toString(),
+        actorId,
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    return res.json({
+      success: true,
+      message: "Storage plan updated successfully.",
+      data: {
+        plan,
+        quotaBytes: newQuota.toString(),
+        usedBytes: used.toString(),
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    return handleError(res, error);
+  } finally {
+    client.release();
+  }
+}
+
 async function getOrganization(req, res) {
   try {
     const result = await pool.query(
-      `SELECT *
+      `SELECT id, name, slug, is_active, created_at, updated_at,
+              join_code_expires_at
        FROM organizations
        WHERE id = $1`,
       [getOrganizationId(req)]
@@ -120,9 +347,10 @@ async function updateOrganization(req, res) {
 
     const result = await pool.query(
       `UPDATE organizations
-       SET name = $1
+       SET name = $1, updated_at = NOW()
        WHERE id = $2
-       RETURNING *`,
+       RETURNING id, name, slug, is_active, created_at, updated_at,
+                 join_code_expires_at`,
       [name.trim(), getOrganizationId(req)]
     );
 
@@ -134,6 +362,84 @@ async function updateOrganization(req, res) {
     }
 
     return res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function generateInvitationCode(req, res) {
+  try {
+    const organizationId = getOrganizationId(req);
+
+    if (!organizationId) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization information is missing.",
+      });
+    }
+
+    // Generate a cryptographically secure 24-character code.
+    const invitationCode = crypto.randomBytes(12).toString("hex").toUpperCase();
+
+    // Store only its SHA-256 hash.
+    const codeHash = crypto
+      .createHash("sha256")
+      .update(invitationCode)
+      .digest("hex");
+
+    const result = await pool.query(
+      `UPDATE organizations
+       SET join_code_hash = $1,
+           join_code_expires_at = NOW() + INTERVAL '7 days',
+           updated_at = NOW()
+       WHERE id = $2 AND is_active = TRUE
+       RETURNING join_code_expires_at`,
+      [codeHash, organizationId]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Active organization not found.",
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Invitation code generated successfully.",
+      data: {
+        invitationCode,
+        expiresAt: result.rows[0].join_code_expires_at,
+      },
+    });
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+async function revokeInvitationCode(req, res) {
+  try {
+    const result = await pool.query(
+      `UPDATE organizations
+       SET join_code_hash = NULL,
+           join_code_expires_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id`,
+      [getOrganizationId(req)]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Invitation code revoked successfully.",
+    });
   } catch (error) {
     return handleError(res, error);
   }
@@ -162,18 +468,25 @@ async function listUsers(req, res) {
 }
 
 async function createUser(req, res) {
+  const client = await pool.connect();
+
   try {
     const { name, email, password, role, departmentId } = req.body;
 
+    const normalizedName = String(name || "").trim();
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const organizationId = getOrganizationId(req);
+
     if (
-      !name?.trim() ||
-      !email?.trim() ||
+      !normalizedName ||
+      !normalizedEmail ||
       typeof password !== "string" ||
-      password.length < 8
+      password.length < 8 ||
+      password.length > 72
     ) {
       return res.status(400).json({
         success: false,
-        message: "Name, email, and a password of at least 8 characters are required.",
+        message: "Name, valid email, and a password between 8 and 72 characters are required.",
       });
     }
 
@@ -184,45 +497,75 @@ async function createUser(req, res) {
       });
     }
 
-    // Reuse the existing authentication service so passwords
-    // are hashed using the project's established implementation.
-    const authService = require("../services/authService");
+    if (!organizationId) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization information is missing.",
+      });
+    }
 
-    const created = await authService.registerUser({
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
-      password,
-    });
+    await client.query("BEGIN");
 
-    let user = created;
-
-    // Public registration assigns the default role and organization.
-    // Only an administrator may assign a different role or department.
-    if (role || departmentId) {
-      const updated = await pool.query(
-        `UPDATE users
-         SET role = COALESCE($1, role),
-             department_id = COALESCE($2, department_id)
-         WHERE id = $3
-           AND organization_id = $4
-         RETURNING id, name, email, role, department_id,
-                   is_active, created_at`,
-        [
-          role || null,
-          departmentId || null,
-          created.id,
-          getOrganizationId(req),
-        ]
+    if (departmentId) {
+      const department = await client.query(
+        `SELECT id
+         FROM departments
+         WHERE id = $1 AND organization_id = $2`,
+        [departmentId, organizationId]
       );
 
-      if (updated.rows.length) {
-        user = updated.rows[0];
+      if (!department.rows.length) {
+        throw Object.assign(
+          new Error("Department does not belong to your organization."),
+          { statusCode: 400 }
+        );
       }
     }
 
-    return res.status(201).json({ success: true, data: user });
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const result = await client.query(
+      `INSERT INTO users
+         (name, email, password_hash, role, organization_id, department_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, name, email, role, department_id,
+                 is_active, created_at`,
+      [
+        normalizedName,
+        normalizedEmail,
+        passwordHash,
+        role || "user",
+        organizationId,
+        departmentId || null,
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    return res.status(201).json({
+      success: true,
+      data: result.rows[0],
+    });
   } catch (error) {
+    await client.query("ROLLBACK");
+
+    if (error.code === "23505") {
+      return res.status(409).json({
+        success: false,
+        message: "This email is already registered.",
+      });
+    }
+
+    if (error.statusCode === 400) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
     return handleError(res, error);
+  } finally {
+    client.release();
   }
 }
 
@@ -504,6 +847,7 @@ async function sharedFiles(req, res) {
                    AND f.organization_id = fs.organization_id
        WHERE fs.organization_id = $1
          AND fs.shared_with_user_id = $2
+         AND fs.revoked_at IS NULL
        ORDER BY fs.created_at DESC`,
       [getOrganizationId(req), getUser(req).id]
     );
@@ -514,74 +858,182 @@ async function sharedFiles(req, res) {
   }
 }
 
+
+
 async function shareFile(req, res) {
+  const db = await pool.connect();
+
   try {
     const { userId, permission = "read" } = req.body;
+    const actor = getUser(req);
+    const organizationId = getOrganizationId(req);
 
     if (!userId || !["read", "write"].includes(permission)) {
       return res.status(400).json({
         success: false,
-        message: "A target user and valid permission (read or write) are required.",
+        message: "A target user and valid permission are required.",
       });
     }
 
-    const fileResult = await pool.query(
-      `SELECT id, owner_id
+    await db.query("BEGIN");
+
+    const fileResult = await db.query(
+      `SELECT id, owner_id, original_name
        FROM files
-       WHERE id = $1 AND organization_id = $2`,
-      [req.params.id, getOrganizationId(req)]
+       WHERE id = $1 AND organization_id = $2
+       FOR UPDATE`,
+      [req.params.id, organizationId]
     );
 
     if (!fileResult.rows.length) {
+      await db.query("ROLLBACK");
+
       return res.status(404).json({
         success: false,
         message: "File not found.",
       });
     }
 
+    const file = fileResult.rows[0];
+
     if (
-      fileResult.rows[0].owner_id !== getUser(req).id &&
-      getUser(req).role !== "admin"
+      file.owner_id !== actor.id &&
+      actor.role !== "admin"
     ) {
+      await db.query("ROLLBACK");
+
       return res.status(403).json({
         success: false,
         message: "Only the file owner or an administrator can share this file.",
       });
     }
 
-    const target = await pool.query(
-      `SELECT id FROM users
-       WHERE id = $1 AND organization_id = $2 AND is_active = TRUE`,
-      [userId, getOrganizationId(req)]
+    const targetResult = await db.query(
+      `SELECT id
+       FROM users
+       WHERE id = $1
+         AND organization_id = $2
+         AND is_active = TRUE`,
+      [userId, organizationId]
     );
 
-    if (!target.rows.length) {
+    if (!targetResult.rows.length) {
+      await db.query("ROLLBACK");
+
       return res.status(400).json({
         success: false,
         message: "The target user is not active in this organization.",
       });
     }
 
-    const result = await pool.query(
-      `INSERT INTO file_shares
-         (organization_id, file_id, shared_by_user_id,
-          shared_with_user_id, permission)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (file_id, shared_with_user_id)
-       DO UPDATE SET permission = EXCLUDED.permission
-       RETURNING *`,
-      [
-        getOrganizationId(req),
-        req.params.id,
-        getUser(req).id,
-        userId,
-        permission,
-      ]
+    const existingResult = await db.query(
+      `SELECT *
+       FROM file_shares
+       WHERE file_id = $1
+         AND organization_id = $2
+         AND shared_with_user_id = $3
+         AND revoked_at IS NULL
+       ORDER BY created_at DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [file.id, organizationId, userId]
     );
 
-    return res.status(201).json({ success: true, data: result.rows[0] });
+    let share;
+    let eventType;
+
+    if (existingResult.rows.length) {
+      const existing = existingResult.rows[0];
+
+      if (existing.permission === permission) {
+        await db.query("COMMIT");
+
+        return res.json({
+          success: true,
+          message: "File is already shared with this permission.",
+          data: existing,
+        });
+      }
+
+      const updated = await db.query(
+        `UPDATE file_shares
+         SET permission = $1,
+             updated_at = NOW()
+         WHERE id = $2
+         RETURNING *`,
+        [permission, existing.id]
+      );
+
+      share = updated.rows[0];
+      eventType = "permission_change";
+    } else {
+      const revokedResult = await db.query(
+        `SELECT id
+         FROM file_shares
+         WHERE file_id = $1
+           AND organization_id = $2
+           AND shared_with_user_id = $3
+           AND revoked_at IS NOT NULL
+         ORDER BY created_at DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [file.id, organizationId, userId]
+      );
+
+      if (revokedResult.rows.length) {
+        const restored = await db.query(
+          `UPDATE file_shares
+           SET permission = $1,
+               shared_by_user_id = $2,
+               revoked_at = NULL,
+               updated_at = NOW()
+           WHERE id = $3
+           RETURNING *`,
+          [permission, actor.id, revokedResult.rows[0].id]
+        );
+
+        share = restored.rows[0];
+      } else {
+        const created = await db.query(
+          `INSERT INTO file_shares (
+            organization_id,
+            file_id,
+            shared_by_user_id,
+            shared_with_user_id,
+            permission
+          )
+          VALUES ($1,$2,$3,$4,$5)
+          RETURNING *`,
+          [organizationId, file.id, actor.id, userId, permission]
+        );
+
+        share = created.rows[0];
+      }
+
+      eventType = "share";
+    }
+
+    await createFileAuditLog(db, {
+      organizationId,
+      fileId: file.id,
+      fileName: file.original_name,
+      actor,
+      eventType,
+      targetUserId: userId,
+      details: { permission },
+    });
+
+    await db.query("COMMIT");
+
+    return res.status(201).json({
+      success: true,
+      data: share,
+    });
   } catch (error) {
+    await db.query("ROLLBACK").catch(() => { });
     return handleError(res, error);
+  } finally {
+    db.release();
   }
 }
 
@@ -593,7 +1045,9 @@ async function listFileShares(req, res) {
        JOIN files f ON f.id = fs.file_id
                    AND f.organization_id = fs.organization_id
        JOIN users u ON u.id = fs.shared_with_user_id
-       WHERE fs.file_id = $1 AND fs.organization_id = $2
+       WHERE fs.file_id = $1
+  AND fs.organization_id = $2
+  AND fs.revoked_at IS NULL
        ORDER BY fs.created_at DESC`,
       [req.params.id, getOrganizationId(req)]
     );
@@ -605,32 +1059,76 @@ async function listFileShares(req, res) {
 }
 
 async function revokeShare(req, res) {
+  const db = await pool.connect();
+
   try {
-    const result = await pool.query(
-      `DELETE FROM file_shares
-       WHERE id = $1
-         AND file_id = $2
-         AND organization_id = $3
-         AND shared_by_user_id = $4
-       RETURNING id`,
+    const actor = getUser(req);
+    const organizationId = getOrganizationId(req);
+
+    await db.query("BEGIN");
+
+    const result = await db.query(
+      `SELECT fs.*, f.original_name
+       FROM file_shares fs
+       JOIN files f
+         ON f.id = fs.file_id
+        AND f.organization_id = fs.organization_id
+       WHERE fs.id = $1
+         AND fs.file_id = $2
+         AND fs.organization_id = $3
+         AND fs.shared_by_user_id = $4
+         AND fs.revoked_at IS NULL
+       FOR UPDATE OF fs`,
       [
         req.params.shareId,
         req.params.id,
-        getOrganizationId(req),
-        getUser(req).id,
+        organizationId,
+        actor.id,
       ]
     );
 
-    if (!result.rowCount) {
+    if (!result.rows.length) {
+      await db.query("ROLLBACK");
+
       return res.status(404).json({
         success: false,
         message: "File share not found or you cannot revoke it.",
       });
     }
 
-    return res.json({ success: true, message: "File share revoked." });
+    const share = result.rows[0];
+
+    await db.query(
+      `UPDATE file_shares
+       SET revoked_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [share.id]
+    );
+
+    await createFileAuditLog(db, {
+      organizationId,
+      fileId: share.file_id,
+      fileName: share.original_name,
+      actor,
+      eventType: "unshare",
+      targetUserId: share.shared_with_user_id,
+      details: {
+        previousPermission: share.permission,
+      },
+    });
+
+    await db.query("COMMIT");
+
+    return res.json({
+      success: true,
+      message: "File share revoked.",
+    });
   } catch (error) {
+    await db.query("ROLLBACK").catch(() => { });
     return handleError(res, error);
+  } finally {
+    db.release();
   }
 }
 // ADMIN DASHBOARD STATISTICS
@@ -672,6 +1170,8 @@ module.exports = {
   updateProfile,
   getOrganization,
   updateOrganization,
+  generateInvitationCode,
+  revokeInvitationCode,
   listUsers,
   createUser,
   updateUser,
@@ -688,4 +1188,6 @@ module.exports = {
   listFileShares,
   revokeShare,
   getStats,
+  getStoragePlan,
+updateStoragePlan,
 };
