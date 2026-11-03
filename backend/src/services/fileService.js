@@ -114,6 +114,76 @@ async function createFileMetadata(metadata) {
   return fileRepository.createFile(normalizedMetadata);
 }
 
+async function createFileMetadataWithQuota(metadata) {
+  const normalizedMetadata = {
+    ...metadata,
+    mimeType: metadata.mimeType ?? null,
+    checksum: metadata.checksum ?? null,
+  };
+
+  validateFileMetadata(normalizedMetadata);
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // Lock organization row to prevent concurrent quota overruns.
+    const organizationResult = await client.query(
+      `SELECT o.id, o.storage_quota_bytes
+       FROM organizations o
+       JOIN users u ON u.organization_id = o.id
+       WHERE u.id = $1
+         AND u.is_active = TRUE
+         AND o.is_active = TRUE
+       FOR UPDATE OF o`,
+      [normalizedMetadata.ownerId]
+    );
+
+    const organization = organizationResult.rows[0];
+
+    if (!organization) {
+      throw Object.assign(
+        new Error("Organization not found"),
+        { statusCode: 403, code: "ORGANIZATION_NOT_FOUND" }
+      );
+    }
+
+    const quota = BigInt(organization.storage_quota_bytes);
+
+    const usageResult = await client.query(
+      `SELECT COALESCE(SUM(size_bytes), 0)::text AS used_bytes
+       FROM files
+       WHERE organization_id = $1`,
+      [organization.id]
+    );
+
+    const used = BigInt(usageResult.rows[0].used_bytes);
+    const incoming = BigInt(normalizedMetadata.sizeBytes);
+
+    if (used + incoming > quota) {
+      throw Object.assign(
+        new Error("Organization storage quota exceeded"),
+        { statusCode: 413, code: "STORAGE_QUOTA_EXCEEDED" }
+      );
+    }
+
+    const file = await fileRepository.createFile(
+      normalizedMetadata,
+      client
+    );
+
+    await client.query("COMMIT");
+
+    return file;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // ============================================================
 // 3. CREATE FILE METADATA WITH IDEMPOTENCY
 // ============================================================
@@ -469,6 +539,7 @@ module.exports = {
   validateFileMetadata,
   createFileMetadata,
   createFileMetadataIdempotently,
+  createFileMetadataWithQuota,
   getFileMetadata,
   getUserFiles,
   removeFileMetadata,

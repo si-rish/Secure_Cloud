@@ -30,10 +30,37 @@ requireRoles("admin"),
 controller.getOrganization
 );
 
+
 router.patch(
 "/organization",
 requireRoles("admin"),
 controller.updateOrganization
+);
+
+router.get(
+  "/storage-plan",
+  requireRoles("admin"),
+  controller.getStoragePlan
+);
+
+router.patch(
+  "/storage-plan",
+  requireRoles("admin"),
+  controller.updateStoragePlan
+);
+
+// Organization invitation codes — administrators only
+
+router.post(
+  "/invitation-code",
+  requireRoles("admin"),
+  controller.generateInvitationCode
+);
+
+router.delete(
+  "/invitation-code",
+  requireRoles("admin"),
+  controller.revokeInvitationCode
 );
 
 // Admin Dashboard Statistics

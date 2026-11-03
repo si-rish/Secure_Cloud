@@ -44,7 +44,7 @@ app.use(
       // Do not grant CORS access to other origins.
       return callback(null, false);
     },
-    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
       "Authorization",

@@ -1,0 +1,7 @@
+BEGIN;
+
+ALTER TABLE organizations
+ADD COLUMN IF NOT EXISTS join_code_hash VARCHAR(64) UNIQUE,
+ADD COLUMN IF NOT EXISTS join_code_expires_at TIMESTAMPTZ;
+
+COMMIT;

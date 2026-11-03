@@ -10,7 +10,7 @@ RUN npm ci --omit=dev
 
 COPY src ./src
 
-RUN mkdir -p /app/storage/uploads
+RUN mkdir -p /app/SecureCloud_Storage/uploads
 
 EXPOSE 5000
 

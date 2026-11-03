@@ -39,3 +39,7 @@ backend/storage/uploads/*
 !backend/storage/uploads/.gitkeep
 
 backend/backups/
+# SecureCloud local storage and database backups
+backend/SecureCloud_Storage/
+backend/storage/Organizations/
+backend/securecloud-backup.dump

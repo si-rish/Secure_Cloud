@@ -9,7 +9,6 @@ const registerUser = async ({
   password,
   organizationMode,
   organizationName,
-  organizationId,
   invitationCode,
 }) => {
   const normalizedName = String(name || "").trim();
@@ -27,7 +26,11 @@ const registerUser = async ({
     });
   }
 
-  if (typeof password !== "string" || password.length < 8 || password.length > 72) {
+  if (
+    typeof password !== "string" ||
+    password.length < 8 ||
+    password.length > 72
+  ) {
     throw Object.assign(
       new Error("Password must be between 8 and 72 characters"),
       { statusCode: 400 }
@@ -51,15 +54,23 @@ const registerUser = async ({
     });
   }
 
-  if (
-    organizationMode === "join" &&
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      String(organizationId || "")
-    )
-  ) {
-    throw Object.assign(new Error("A valid organization ID is required"), {
-      statusCode: 400,
-    });
+  let invitationCodeHash = null;
+
+  if (organizationMode === "join") {
+    const normalizedInvitationCode = String(invitationCode || "")
+      .trim()
+      .toUpperCase();
+
+    if (!/^[A-Z0-9-]{10,40}$/.test(normalizedInvitationCode)) {
+      throw Object.assign(new Error("A valid invitation code is required"), {
+        statusCode: 400,
+      });
+    }
+
+    invitationCodeHash = crypto
+      .createHash("sha256")
+      .update(normalizedInvitationCode)
+      .digest("hex");
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
@@ -84,6 +95,7 @@ const registerUser = async ({
 
     if (organizationMode === "create") {
       const trimmedOrganizationName = organizationName.trim();
+
       const slugBase =
         trimmedOrganizationName
           .toLowerCase()
@@ -102,27 +114,20 @@ const registerUser = async ({
       organization = organizationResult.rows[0];
       role = "admin";
     } else {
-      // An organization ID alone is not a secure invitation mechanism.
-      // Restrict joining to an active organization.
       const organizationResult = await client.query(
         `SELECT id, name, slug
          FROM organizations
-         WHERE id = $1 AND is_active = TRUE
-         LIMIT 1`,
-        [organizationId]
+         WHERE join_code_hash = $1
+           AND join_code_expires_at > NOW()
+           AND is_active = TRUE
+         LIMIT 1
+         FOR UPDATE`,
+        [invitationCodeHash]
       );
 
       if (organizationResult.rows.length === 0) {
-        throw Object.assign(new Error("Organization not found or inactive"), {
-          statusCode: 404,
-        });
-      }
-
-      // Do not trust a client-supplied invitation code without
-      // implementing server-side invitation validation.
-      if (invitationCode) {
         throw Object.assign(
-          new Error("Invitation-code validation is not configured"),
+          new Error("Invalid or expired invitation code"),
           { statusCode: 403 }
         );
       }
@@ -135,7 +140,8 @@ const registerUser = async ({
       `INSERT INTO users
          (name, email, password_hash, role, organization_id)
        VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, name, email, role, organization_id, department_id, is_active, created_at`,
+       RETURNING id, name, email, role, organization_id,
+                 department_id, is_active, created_at`,
       [
         normalizedName,
         normalizedEmail,

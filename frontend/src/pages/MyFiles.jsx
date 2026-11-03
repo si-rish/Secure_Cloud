@@ -413,68 +413,92 @@ function MyFiles() {
   }
 
   async function handlePreview(file) {
-    console.log("PREVIEW BUTTON CLICKED:", file);
+  console.log("PREVIEW BUTTON CLICKED:", file);
 
-    setError("");
-    setNotice("");
+  setError("");
+  setNotice("");
 
-    try {
-      const fileId = file.id || file.fileId || file._id;
+  let previewUrl = null;
 
-      if (!fileId) {
-        throw new Error("File ID is missing.");
-      }
+  try {
+    const fileId = file.id || file.fileId || file._id;
 
-      const baseUrl = (
-        import.meta.env.VITE_API_URL || "http://localhost:5000/api/v1"
-      ).replace(/\/$/, "");
-
-      const response = await fetch(
-        `${baseUrl}/files/${encodeURIComponent(fileId)}/content`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/pdf, */*",
-          },
-        },
-      );
-
-      console.log("PREVIEW RESPONSE STATUS:", response.status);
-      console.log(
-        "PREVIEW CONTENT TYPE:",
-        response.headers.get("content-type"),
-      );
-
-      if (!response.ok) {
-        const result = await response.json().catch(() => ({}));
-        throw new Error(
-          result?.error?.message ||
-            result?.message ||
-            `Preview failed (${response.status}).`,
-        );
-      }
-
-      const blob = await response.blob();
-
-      console.log("PREVIEW FILE SIZE:", blob.size);
-      console.log("PREVIEW BLOB TYPE:", blob.type);
-
-      if (blob.size === 0) {
-        throw new Error("The downloaded file is empty.");
-      }
-
-      const previewBlob = new Blob([blob], {
-        type: "application/pdf",
-      });
-
-      const previewUrl = URL.createObjectURL(previewBlob);
-      window.open(previewUrl, "_blank");
-    } catch (err) {
-      console.error("PREVIEW ERROR:", err);
-      setError(err.message || "Preview failed.");
+    if (!fileId) {
+      throw new Error("File ID is missing.");
     }
+
+    const baseUrl = (
+      import.meta.env.VITE_API_URL || "http://localhost:5000/api/v1"
+    ).replace(/\/$/, "");
+
+    const response = await fetch(
+      `${baseUrl}/files/${encodeURIComponent(fileId)}/preview`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/pdf, image/*, */*",
+        },
+      }
+    );
+
+    console.log("PREVIEW RESPONSE STATUS:", response.status);
+    console.log(
+      "PREVIEW CONTENT TYPE:",
+      response.headers.get("content-type")
+    );
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+
+      throw new Error(
+        result?.error?.message ||
+          result?.message ||
+          `Preview failed (${response.status}).`
+      );
+    }
+
+    const blob = await response.blob();
+
+    console.log("PREVIEW FILE SIZE:", blob.size);
+    console.log("PREVIEW BLOB TYPE:", blob.type);
+
+    if (blob.size === 0) {
+      throw new Error("The preview file is empty.");
+    }
+
+    const contentType =
+      response.headers.get("content-type") || blob.type;
+
+    if (
+      !contentType.includes("pdf") &&
+      !contentType.startsWith("image/")
+    ) {
+      throw new Error("Preview is supported only for PDF and image files.");
+    }
+
+    const previewBlob = new Blob([blob], {
+      type: contentType,
+    });
+
+    previewUrl = URL.createObjectURL(previewBlob);
+
+    const previewWindow = window.open(previewUrl, "_blank");
+
+    if (!previewWindow) {
+      URL.revokeObjectURL(previewUrl);
+      throw new Error("Please allow pop-ups to preview this file.");
+    }
+
+    setTimeout(() => {
+      URL.revokeObjectURL(previewUrl);
+    }, 60000);
+
+  } catch (err) {
+    console.error("PREVIEW ERROR:", err);
+    setError(err.message || "Preview failed.");
   }
+}
 
   async function handleDelete(file) {
     const fileId = file.id || file.fileId || file._id;
